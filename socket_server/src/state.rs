@@ -6,7 +6,6 @@ use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
 use crate::{
-    conversation::Conversation,
     protocol::ServerMsg,
     send::{SendServerMsgError, send_server_msg},
 };
@@ -14,9 +13,8 @@ use crate::{
 pub struct RouterState {
     pub decoding_key: DecodingKey,
     pub connections: HashMap<u64, UnboundedSender<Message>>,
-    pub connection_to_user: HashMap<u64, Uuid>,
-    //pub users: HashMap<Uuid, UserInfo>,
-    pub conversations: HashMap<Uuid, Conversation>,
+    pub connection_to_mailbox: HashMap<u64, Uuid>, // Given a connection, which mailbox does it own?
+    pub mailbox_to_connections: HashMap<Uuid, Vec<u64>>, // Given a mailbox, which connections are active for it?
 }
 
 impl RouterState {
@@ -24,21 +22,22 @@ impl RouterState {
         RouterState {
             decoding_key,
             connections: HashMap::new(),
-            connection_to_user: HashMap::new(),
-            //users: HashMap::new(),
-            conversations: HashMap::new(),
+            connection_to_mailbox: HashMap::new(),
+            mailbox_to_connections: HashMap::new(),
         }
     }
 
     pub fn disconnect_client(&mut self, client_id: u64) {
         self.connections.remove(&client_id);
-        self.connection_to_user.remove(&client_id);
 
-        // TODO: Consider
-        // We may want to also drop the users info if they have no conversations, and potentially the conversations, but I don't want to do that yet.
-        // Here's where things get tricky, what if the user is connected on two devices? What happens?
-        // If we try to send a disconnect message to their conversations, what happens if they disconnect from one device but not the second?
-        // We probably don't want to send a disconnect message if that happens...
+        if let Some(mailbox_id) = self.connection_to_mailbox.remove(&client_id) {
+            if let Some(conns) = self.mailbox_to_connections.get_mut(&mailbox_id) {
+                conns.retain(|&id| id != client_id);
+                if conns.is_empty() {
+                    self.mailbox_to_connections.remove(&mailbox_id);
+                }
+            }
+        }
     }
 
     pub fn send_or_disconnect_server_msg(
@@ -57,42 +56,30 @@ impl RouterState {
         }
     }
 
-    pub fn send_server_msg_to_conversation(
-        &mut self,
-        conversation_id: Uuid,
-        sender_connection_id: u64,
-        message: &str,
-    ) {
-        // Get the original sender ID
-        let original_sender_id = match self.connection_to_user.get(&sender_connection_id) {
-            Some(s) => *s,
-            None => return,
+    pub fn deliver_to_mailbox(&mut self, mailbox_id: Uuid, payload: &str) {
+        let message = ServerMsg::Delivery {
+            payload: payload.to_string(),
         };
 
-        let participants = match self.conversations.get(&conversation_id) {
-            Some(c) => c.participants.clone(),
-            None => return,
-        };
-
-        let mut senders: Vec<(u64, UnboundedSender<Message>)> = vec![];
-        for (connection_id, user_id) in &self.connection_to_user {
-            if participants.contains(user_id) {
-                if let Some(sender) = self.connections.get(connection_id) {
-                    senders.push((*connection_id, sender.clone()));
-                }
+        let connections = match self.mailbox_to_connections.get(&mailbox_id) {
+            Some(c) => c,
+            None => {
+                eprintln!("Tried to deliver message to no active clients NO_CONNECTIONS");
+                return;
             }
+        };
+        let clients_to_send_to: Vec<u64> = connections.iter().copied().collect();
+        let mut mailboxes_to_send_to: Vec<(u64, UnboundedSender<Message>)> = vec![];
+        for c in clients_to_send_to {
+            let connection = match self.connections.get(&c) {
+                Some(conn) => conn.clone(),
+                None => continue,
+            };
+            mailboxes_to_send_to.push((c, connection));
         }
 
-        for (cid, tx) in senders {
-            self.send_or_disconnect_server_msg(
-                cid,
-                &tx,
-                &ServerMsg::Chat {
-                    conversation: conversation_id.to_string(),
-                    from: original_sender_id.to_string(),
-                    message: message.to_string(),
-                },
-            );
+        for (client_id, mailbox) in mailboxes_to_send_to {
+            self.send_or_disconnect_server_msg(client_id, &mailbox, &message);
         }
     }
 }

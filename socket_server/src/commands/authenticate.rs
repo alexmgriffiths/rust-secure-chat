@@ -21,7 +21,20 @@ pub fn handle_authenticate_command(
         };
 
     router_state
-        .connection_to_user
+        .connection_to_mailbox
         .insert(client_id, claims.claims.user.id);
+    // We need to also append the reverse map
+    // If the user already has a hashmap value append
+    // If they don't create a hashmap value with a vector of u64 with 1 item
+    let mailbox_id = claims.claims.user.id;
+    let conns = router_state
+        .mailbox_to_connections
+        .entry(mailbox_id)
+        .or_default();
+
+    if !conns.contains(&client_id) {
+        conns.push(client_id);
+    }
+
     Ok(claims.claims.user.id.to_string())
 }
