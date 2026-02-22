@@ -49,13 +49,13 @@ export default function DeviceSetupPage() {
     setLoading(true);
     try {
       const keys = generateDeviceKeys();
-      await putKeys(keys);
-      await uploadDeviceKeys(
+      const device_id = await uploadDeviceKeys(
         userId,
         token,
         keys.publicUpload,
         deviceName.trim(),
       );
+      await putKeys({ ...keys, device_id });
       navigate("/chat");
     } catch (err: any) {
       setError("Failed to register device. Please try again.");

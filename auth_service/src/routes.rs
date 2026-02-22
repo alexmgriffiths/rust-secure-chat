@@ -6,7 +6,7 @@ use tower_http::cors::{Any, CorsLayer};
 
 use crate::{
     handlers::{AppState, login, register, root, verify},
-    key_handlers::{get_prekey_bundle, list_user_devices, upload_device},
+    key_handlers::{get_all_prekey_bundles, get_prekey_bundle, list_user_devices, upload_device},
 };
 
 pub fn create_router(state: AppState) -> Router {
@@ -23,6 +23,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/users/{user_id}/devices", post(upload_device))
         .route("/users/{user_id}/keys", get(get_prekey_bundle))
         .route("/users/{user_id}/devices", get(list_user_devices))
+        .route("/users/{user_id}/all-keys", get(get_all_prekey_bundles))
         .layer(cors)
         .with_state(state)
 }

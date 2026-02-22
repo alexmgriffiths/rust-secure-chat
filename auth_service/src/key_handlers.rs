@@ -110,6 +110,79 @@ pub async fn upload_device(
         .into_response()
 }
 
+pub async fn get_all_prekey_bundles(
+    State(state): State<AppState>,
+    Path(user_id): Path<Uuid>,
+) -> impl IntoResponse {
+    let devices_result = sqlx::query_as::<_, Device>(
+        "SELECT id, user_id, device_name,
+                identity_key_ed25519_public, identity_key_x25519_public,
+                signed_prekey_id, signed_prekey_public, signed_prekey_signature,
+                created_at
+         FROM devices
+         WHERE user_id = $1
+         ORDER BY created_at DESC",
+    )
+    .bind(user_id)
+    .fetch_all(&state.db)
+    .await;
+
+    let devices = match devices_result {
+        Ok(d) if !d.is_empty() => d,
+        Ok(_) => return (StatusCode::NOT_FOUND, "No devices found for user").into_response(),
+        Err(err) => {
+            let msg = format!("Failed to fetch devices: {}", err);
+            return (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response();
+        }
+    };
+
+    let mut bundles: Vec<PreKeyBundle> = Vec::with_capacity(devices.len());
+
+    for device in devices {
+        // Consume exactly 1 OTPK for this device (if any)
+        let otpk = sqlx::query_as::<_, OneTimePreKey>(
+            "DELETE FROM one_time_prekeys
+             WHERE id = (
+                SELECT id
+                FROM one_time_prekeys
+                WHERE device_id = $1
+                ORDER BY created_at ASC
+                LIMIT 1
+             )
+             RETURNING id, device_id, key_id, public_key, created_at",
+        )
+        .bind(device.id)
+        .fetch_optional(&state.db)
+        .await;
+
+        let otpk = match otpk {
+            Ok(v) => v, // Option<OneTimePreKey>
+            Err(err) => {
+                let msg = format!(
+                    "Failed to consume one-time prekey for device {}: {}",
+                    device.id, err
+                );
+                return (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response();
+            }
+        };
+
+        bundles.push(PreKeyBundle {
+            device_id: device.id,
+            identity_key_ed25519_public: device.identity_key_ed25519_public,
+            identity_key_x25519_public: device.identity_key_x25519_public,
+            signed_prekey_id: device.signed_prekey_id,
+            signed_prekey_public: device.signed_prekey_public,
+            signed_prekey_signature: device.signed_prekey_signature,
+            one_time_prekey: otpk.map(|k| OneTimePreKeyResponse {
+                key_id: k.key_id,
+                public_key: k.public_key,
+            }),
+        });
+    }
+
+    (StatusCode::OK, Json(bundles)).into_response()
+}
+
 /// Fetch a prekey bundle for a user (for establishing encrypted session)
 /// This consumes one one-time prekey if available
 pub async fn get_prekey_bundle(

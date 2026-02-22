@@ -31,18 +31,16 @@ Message history is stored locally in IndexedDB because there's no way to re-decr
 - Conversation sidebar showing all active threads
 - JWT expiry detection — redirects to login before the socket even opens
 - Safe ratchet state handling — state only advances after a message is confirmed sent, so a failed send can't corrupt the session
+- Offline message delivery -
+- Multi-device support
 
 ## What still needs doing
-
-**Offline message delivery** — If you send a message to someone who isn't connected, it's dropped. The socket server needs to persist messages to a database and deliver them when the recipient comes online. This is probably the most important missing piece.
 
 **User discovery** — Right now you have to paste someone's UUID to message them, which is terrible. A simple username search endpoint on the auth service would fix this, and the sidebar could show names instead of truncated IDs.
 
 **OPK replenishment** — Each new session from a new contact consumes one of your one-time prekeys. You uploaded 10 on registration and never get more. The client should check how many are left on the server after initiating a session and top up when running low.
 
 **Token refresh** — JWTs expire after 15 minutes. There's no refresh token flow, so users have to log in again every 15 minutes. Either a refresh token endpoint or a much longer TTL for development would help.
-
-**Registration UI** — There's no registration form in the app yet. New users have to be created some other way.
 
 ## Running it
 

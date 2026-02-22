@@ -86,8 +86,8 @@ export async function uploadDeviceKeys(
   token: string,
   keys: any,
   deviceName: string,
-) {
-  await axios.post(
+): Promise<number> {
+  const response = await axios.post(
     `http://localhost:3000/users/${userId}/devices`,
     {
       device_name: deviceName,
@@ -103,4 +103,5 @@ export async function uploadDeviceKeys(
     },
     { headers: { Authorization: `Bearer ${token}` } },
   );
+  return response.data.device_id as number;
 }

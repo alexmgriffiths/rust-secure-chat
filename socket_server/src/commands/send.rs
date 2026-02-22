@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use uuid::Uuid;
 
 use crate::{protocol::PubSubPayload, state::RouterState};
@@ -68,7 +70,8 @@ pub async fn handle_send_command(
     // Then mark delivered at. This allows us to cheat some of the routing cauise we're on tyhe same socket
     // If it's on a different server call router_state.redis.publish(server_id, json_payload)
     let recipient_connections = router_state.redis.get_connections(mailbox_id).await;
-    for (_, rconn_server) in recipient_connections {
+    let servers: HashSet<String> = recipient_connections.into_values().collect();
+    for rconn_server in servers {
         if rconn_server == router_state.server_id {
             router_state.deliver_to_mailbox(mailbox_id, payload);
             if let Err(e) = sqlx::query(
@@ -82,19 +85,15 @@ pub async fn handle_send_command(
             {
                 // TODO: Tracing and error logging
                 eprintln!("Failed to update message delivery: {e}");
-                continue; // Maybe we just break here? Or return early an error?
-                // We found them but failed to deliver, but this will all need to be refactored again when multi-device is a thing so... Later problem?
+                continue;
             };
-            return Ok(());
+        } else {
+            // Some other server's problem
+            router_state
+                .redis
+                .publish(&rconn_server, &pubsub_payload)
+                .await;
         }
-
-        // Wouldn't this send it to multiple servers though if they're connected to multiple? Where the above only sends it to the current due to the return
-        // Also if it hits this first, then they're also connect to the current but that's later in the loop, it's delivered twice
-        // Potentially intentional?
-        router_state
-            .redis
-            .publish(&rconn_server, &pubsub_payload)
-            .await;
     }
     Ok(())
 }

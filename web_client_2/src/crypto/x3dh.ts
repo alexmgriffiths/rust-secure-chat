@@ -53,6 +53,40 @@ export function fromBase64(b64: string): Uint8Array {
   return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
 }
 
+export async function fetchAllDeviceBundles(
+  recipientId: string,
+  token: string,
+): Promise<PreKeyBundle[]> {
+  const { data } = await axios.get(
+    `http://localhost:3000/users/${recipientId}/all-keys`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+
+  // Server returns byte arrays as plain number arrays — convert back to Uint8Array
+  let devices: PreKeyBundle[] = [];
+  data.forEach((device: any) => {
+    devices.push({
+      device_id: device.device_id,
+      identity_key_ed25519_public: new Uint8Array(
+        device.identity_key_ed25519_public,
+      ),
+      identity_key_x25519_public: new Uint8Array(
+        device.identity_key_x25519_public,
+      ),
+      signed_prekey_id: device.signed_prekey_id,
+      signed_prekey_public: new Uint8Array(device.signed_prekey_public),
+      signed_prekey_signature: new Uint8Array(device.signed_prekey_signature),
+      one_time_prekey: device.one_time_prekey
+        ? {
+            key_id: device.one_time_prekey.key_id,
+            public_key: new Uint8Array(device.one_time_prekey.public_key),
+          }
+        : null,
+    });
+  });
+  return devices;
+}
+
 export async function fetchPrekeyBundle(
   recipientId: string,
   token: string,
