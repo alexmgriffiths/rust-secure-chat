@@ -159,7 +159,8 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
 
     ws.onopen = () => {
       setWsStatus("connected");
-      const frame = JSON.stringify({ type: "authenticate", token });
+      const lastSeq = parseInt(localStorage.getItem(`relay_last_seq_${userId}`) ?? "0");
+      const frame = JSON.stringify({ type: "authenticate", token, last_seq: lastSeq });
       ws.send(frame);
       addLog("sent", frame);
     };
@@ -185,6 +186,12 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
       }
 
       if (parsed.type !== "delivery") return;
+
+      const deliverySeq = parsed.seq as number;
+      const lastSeq = parseInt(localStorage.getItem(`relay_last_seq_${userId}`) ?? "0");
+      if (deliverySeq > lastSeq) {
+        localStorage.setItem(`relay_last_seq_${userId}`, deliverySeq.toString());
+      }
 
       const envelope = JSON.parse(parsed.payload);
 

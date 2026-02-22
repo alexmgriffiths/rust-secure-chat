@@ -45,9 +45,16 @@ pub async fn handle_router(
                 mailbox_id,
                 payload,
                 message_id,
+                seq,
             } => {
-                handle_pubsub_delivery_event(&mut router_state, mailbox_id, payload, message_id)
-                    .await;
+                handle_pubsub_delivery_event(
+                    &mut router_state,
+                    mailbox_id,
+                    seq,
+                    payload,
+                    message_id,
+                )
+                .await;
             }
         }
     }

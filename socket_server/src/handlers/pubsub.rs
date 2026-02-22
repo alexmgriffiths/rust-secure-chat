@@ -7,11 +7,13 @@ use crate::state::RouterState;
 pub async fn handle_pubsub_delivery_event(
     router_state: &mut RouterState,
     mailbox_id: Uuid,
+    seq: i64,
     payload: String,
     message_id: Uuid,
 ) {
-    router_state.deliver_to_mailbox(mailbox_id, &payload);
+    router_state.deliver_to_mailbox(mailbox_id, seq, &payload);
 
+    // We can probably remove this, but it'll probably be handle for debugging and later
     if let Err(e) = sqlx::query(
         r#"
         UPDATE pending_messages SET delivered_at = NOW() WHERE id = $1

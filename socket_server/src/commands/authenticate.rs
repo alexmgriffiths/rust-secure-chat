@@ -15,6 +15,7 @@ pub async fn handle_authenticate_command(
     router_state: &mut RouterState,
     client_id: u64,
     token: &str,
+    last_seq: i64,
 ) -> Result<String, AuthenticateError> {
     let claims: TokenData<Claims> =
         match decode::<Claims>(token, &router_state.decoding_key, &Validation::default()) {
@@ -31,12 +32,12 @@ pub async fn handle_authenticate_command(
     let undelivered_messages = match sqlx::query_as!(
         PendingMessage,
         r#"
-    SELECT id, mailbox_id, payload, created_at, delivered_at
+    SELECT id, seq, mailbox_id, payload, created_at, delivered_at
     FROM pending_messages
-    WHERE mailbox_id = $1
-      AND delivered_at IS NULL
+    WHERE mailbox_id = $1 AND seq > $2 ORDER BY seq ASC
     "#,
-        mailbox_id
+        mailbox_id,
+        last_seq
     )
     .fetch_all(&router_state.db)
     .await
@@ -71,28 +72,17 @@ pub async fn handle_authenticate_command(
 
     // I guess sending undelivered down here is fine, they've already authed
     // Problem is if the delivery fails at any step we're kinda fucked regardless.
-    let mut messages_delivered: Vec<Uuid> = vec![];
-    for undelivered in undelivered_messages {
-        router_state.deliver_to_mailbox(mailbox_id, &undelivered.payload);
-        messages_delivered.push(undelivered.id);
-    }
-
-    if !messages_delivered.is_empty() {
-        if sqlx::query!(
-            r#"
-        UPDATE pending_messages
-        SET delivered_at = now()
-        WHERE id = ANY($1)
-        "#,
-            &messages_delivered[..],
-        )
-        .execute(&router_state.db)
-        .await
-        .is_err()
-        {
-            // Not a massive deal though since they were actually delivered.
-            eprintln!("Failed to mark messages as delivered.");
-        };
+    if let Some(tx) = router_state.connections.get(&client_id).cloned() {
+        for undelivered in undelivered_messages {
+            router_state.send_or_disconnect_server_msg(
+                client_id,
+                &tx,
+                &crate::protocol::ServerMsg::Delivery {
+                    seq: undelivered.seq,
+                    payload: undelivered.payload,
+                },
+            );
+        }
     }
 
     Ok(mailbox_id.to_string())

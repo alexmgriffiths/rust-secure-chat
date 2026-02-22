@@ -70,8 +70,9 @@ impl RouterState {
         }
     }
 
-    pub fn deliver_to_mailbox(&mut self, mailbox_id: Uuid, payload: &str) {
+    pub fn deliver_to_mailbox(&mut self, mailbox_id: Uuid, seq: i64, payload: &str) {
         let message = ServerMsg::Delivery {
+            seq,
             payload: payload.to_string(),
         };
 

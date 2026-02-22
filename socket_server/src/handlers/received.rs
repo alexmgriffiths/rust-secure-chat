@@ -14,7 +14,7 @@ pub async fn handle_received_event(
         return;
     };
     match command {
-        Command::Authenticate { token } => {
+        Command::Authenticate { token, last_seq } => {
             // If the user is already authenticated, ignore this command
             if router_state.connection_to_mailbox.contains_key(&client_id) {
                 router_state.send_or_disconnect_server_msg(
@@ -26,7 +26,14 @@ pub async fn handle_received_event(
                 );
                 return;
             }
-            let user_id = match handle_authenticate_command(router_state, client_id, &token).await {
+            let user_id = match handle_authenticate_command(
+                router_state,
+                client_id,
+                &token,
+                last_seq,
+            )
+            .await
+            {
                 Err(_) => {
                     // TODO: Handle actual error rather than hard-coding maybe
                     router_state.send_or_disconnect_server_msg(

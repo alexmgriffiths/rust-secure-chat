@@ -5,7 +5,6 @@ use uuid::Uuid;
 use crate::{protocol::PubSubPayload, state::RouterState};
 
 pub enum SendError {
-    InsertionFailed,
     RedisPayloadSerializeFailed,
 }
 
@@ -18,21 +17,18 @@ pub async fn handle_send_command(
 ) -> Result<(), SendError> {
     // Things to do
     // Insert into pending_messages
-    if let Err(e) = sqlx::query(
+    let seq = sqlx::query_scalar(
         r#"
     INSERT INTO pending_messages (id, mailbox_id, payload, created_at)
-    VALUES ($1, $2, $3, NOW()) ON CONFLICT (id) DO NOTHING
+    VALUES ($1, $2, $3, NOW()) ON CONFLICT (id) DO NOTHING RETURNING seq
     "#,
     )
     .bind(message_id)
     .bind(mailbox_id)
     .bind(payload)
-    .execute(&router_state.db)
+    .fetch_one(&router_state.db)
     .await
-    {
-        eprintln!("Failed to insert message: {e}");
-        return Err(SendError::InsertionFailed);
-    }
+    .unwrap_or(0);
 
     // Send ServerMsg::Ack back to sender
     // We send ACKS back to say "Hey this message has persisted in the database, go ahead and commit to updating your ratchet state"
@@ -56,6 +52,7 @@ pub async fn handle_send_command(
     let pubsub_payload = match serde_json::to_string(&PubSubPayload {
         mailbox_id,
         message_id,
+        seq,
         payload: payload.to_string(),
     }) {
         Err(e) => {
@@ -73,20 +70,7 @@ pub async fn handle_send_command(
     let servers: HashSet<String> = recipient_connections.into_values().collect();
     for rconn_server in servers {
         if rconn_server == router_state.server_id {
-            router_state.deliver_to_mailbox(mailbox_id, payload);
-            if let Err(e) = sqlx::query(
-                r#"
-                UPDATE pending_messages SET delivered_at = NOW() WHERE id = $1
-                "#,
-            )
-            .bind(message_id)
-            .execute(&router_state.db)
-            .await
-            {
-                // TODO: Tracing and error logging
-                eprintln!("Failed to update message delivery: {e}");
-                continue;
-            };
+            router_state.deliver_to_mailbox(mailbox_id, seq, payload);
         } else {
             // Some other server's problem
             router_state

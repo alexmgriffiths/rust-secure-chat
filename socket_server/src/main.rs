@@ -103,6 +103,7 @@ pub async fn handle_redis_setup(main_sender: UnboundedSender<Event>) {
                 mailbox_id: msg.mailbox_id,
                 payload: msg.payload,
                 message_id: msg.message_id,
+                seq: msg.seq,
             })
             .is_err()
         {

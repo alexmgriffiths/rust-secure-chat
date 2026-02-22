@@ -10,6 +10,8 @@ use uuid::Uuid;
 pub enum Command {
     Authenticate {
         token: String,
+        #[serde(default)]
+        last_seq: i64,
     },
     Send {
         mailbox_id: String,
@@ -21,7 +23,7 @@ pub enum Command {
 #[derive(Serialize, Debug)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMsg {
-    Delivery { payload: String },
+    Delivery { seq: i64, payload: String },
     Info { message: String },
     Error { message: String },
     Ack { message_id: String },
@@ -42,6 +44,7 @@ pub enum Event {
     PubSubDelivery {
         mailbox_id: Uuid,
         payload: String,
+        seq: i64,
         message_id: Uuid,
     },
 }
@@ -75,6 +78,7 @@ pub struct Claims {
 pub struct PubSubPayload {
     pub mailbox_id: Uuid,
     pub message_id: Uuid,
+    pub seq: i64,
     pub payload: String,
 }
 
@@ -83,6 +87,7 @@ pub struct PubSubPayload {
 pub struct PendingMessage {
     pub id: Uuid,
     pub mailbox_id: Uuid,
+    pub seq: i64,
     pub payload: String,
     #[serde(with = "chrono::serde::ts_seconds")]
     pub created_at: DateTime<Utc>,
