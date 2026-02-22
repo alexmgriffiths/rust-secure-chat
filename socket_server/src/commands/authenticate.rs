@@ -1,5 +1,4 @@
 use jsonwebtoken::{TokenData, Validation, decode};
-use uuid::Uuid;
 
 use crate::{
     protocol::{Claims, PendingMessage},
