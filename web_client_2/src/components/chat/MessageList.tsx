@@ -1,0 +1,44 @@
+import { useEffect, useRef } from "react";
+import { Message } from "../../types/chat";
+
+function Bubble({ msg }: { msg: Message }) {
+  if (msg.kind === "system") {
+    return (
+      <div className="msg-system">
+        <span>{msg.content}</span>
+      </div>
+    );
+  }
+  return (
+    <div className={`msg-row msg-row-${msg.kind}`}>
+      <div className={`bubble bubble-${msg.kind}`}>
+        <span className="bubble-text">{msg.content}</span>
+        <span className="bubble-time">{msg.timestamp}</span>
+      </div>
+    </div>
+  );
+}
+
+type Props = { messages: Message[] };
+
+export function MessageList({ messages }: Props) {
+  const endRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  return (
+    <div className="messages-area">
+      {messages.length === 0 ? (
+        <div className="messages-empty">
+          <p className="empty-headline">No messages yet</p>
+          <p className="empty-sub">Paste a recipient ID above and say hello.</p>
+        </div>
+      ) : (
+        messages.map((msg) => <Bubble key={msg.id} msg={msg} />)
+      )}
+      <div ref={endRef} />
+    </div>
+  );
+}

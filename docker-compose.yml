@@ -36,6 +36,21 @@ services:
       retries: 20
     networks:
       - app-net
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    networks:
+      - app-net
 
   # Optional: Auth service (uncomment when you have a Dockerfile)
   # auth-service:
@@ -97,6 +112,7 @@ services:
 volumes:
   auth_db_data:
   chat_db_data:
+  redis_data:
 
 networks:
   app-net:

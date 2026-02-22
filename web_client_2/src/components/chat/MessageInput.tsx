@@ -1,0 +1,45 @@
+import { useState } from "react";
+
+type Props = {
+  disabled: boolean;
+  placeholder?: string;
+  onSend: (text: string) => void;
+};
+
+export function MessageInput({ disabled, placeholder = "Message", onSend }: Props) {
+  const [value, setValue] = useState("");
+
+  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!value.trim()) return;
+    onSend(value);
+    setValue("");
+  };
+
+  return (
+    <form className="chat-input-bar" onSubmit={handleSubmit}>
+      <input
+        className="chat-input-field"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        placeholder={placeholder}
+        disabled={disabled}
+      />
+      <button
+        type="submit"
+        className="btn-send"
+        disabled={disabled || !value.trim()}
+        aria-label="Send"
+      >
+        <svg
+          width="16" height="16" viewBox="0 0 24 24"
+          fill="none" stroke="currentColor" strokeWidth="2.5"
+          strokeLinecap="round" strokeLinejoin="round"
+        >
+          <line x1="22" y1="2" x2="11" y2="13" />
+          <polygon points="22 2 15 22 11 13 2 9 22 2" />
+        </svg>
+      </button>
+    </form>
+  );
+}
