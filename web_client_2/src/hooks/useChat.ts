@@ -178,7 +178,7 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
       if (parsed.type === "ack") {
         const pending = pendingAcks.current.get(parsed.message_id);
         if (pending) {
-          sessionsRef.current.set(pending.sessionKey, pending.newState);
+          // sessionsRef is already updated in-memory at encrypt time — just persist to IndexedDB now
           saveSession(pending.sessionKey, pending.newState);
           pendingAcks.current.delete(parsed.message_id);
         }
@@ -287,6 +287,7 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
         });
         const message_id = crypto.randomUUID();
         const sessionKey = `${rid}:${bundle.device_id}`;
+        sessionsRef.current.set(sessionKey, newState);
         const frame = JSON.stringify({ type: "send", message_id, mailbox_id: rid, payload: envelope });
         socketRef.current!.send(frame);
         pendingAcks.current.set(message_id, { newState, sessionKey });
@@ -299,6 +300,7 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
         const deviceId = parseInt(sessionKey.split(":")[1]);
         const envelope = JSON.stringify({ type: "msg", ik: myIK, device_id: deviceId, ...header, ct, nonce });
         const message_id = crypto.randomUUID();
+        sessionsRef.current.set(sessionKey, newState);
         const frame = JSON.stringify({ type: "send", message_id, mailbox_id: rid, payload: envelope });
         socketRef.current!.send(frame);
         pendingAcks.current.set(message_id, { newState, sessionKey });
@@ -326,6 +328,7 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
         });
         const message_id = crypto.randomUUID();
         const sessionKey = `${userId}:${bundle.device_id}`;
+        sessionsRef.current.set(sessionKey, newState);
         const frame = JSON.stringify({ type: "send", message_id, mailbox_id: userId, payload: syncEnvelope });
         socketRef.current!.send(frame);
         pendingAcks.current.set(message_id, { newState, sessionKey });
@@ -337,6 +340,7 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
         const deviceId = parseInt(sessionKey.split(":")[1]);
         const syncEnvelope = JSON.stringify({ type: "msg", ik: myIK, device_id: deviceId, ...header, ct, nonce });
         const message_id = crypto.randomUUID();
+        sessionsRef.current.set(sessionKey, newState);
         const frame = JSON.stringify({ type: "send", message_id, mailbox_id: userId, payload: syncEnvelope });
         socketRef.current!.send(frame);
         pendingAcks.current.set(message_id, { newState, sessionKey });
