@@ -38,6 +38,12 @@ type LogEntry = {
   content: string;
 };
 
+type ConversationSummary = {
+  id: string;       // other person's UUID
+  preview: string;  // last message text
+  timestamp: string;
+};
+
 type AuthCtx = { token: string; userId: string; logout: () => void };
 
 function now() {
@@ -73,12 +79,15 @@ export default function ChatPage() {
   const { getAllValues, putValue, isDBConnecting } = useIndexedDB("keys-db", [
     "keys-table",
     "sessions-table",
+    "messages-table",
+    "contacts-table",
   ]);
 
   const [wsStatus, setWsStatus] = useState<WsStatus>("disconnected");
   const socketRef = useRef<WebSocket | null>(null);
   const [recipientId, setRecipientId] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [msgInput, setMsgInput] = useState("");
 
   const [log, setLog] = useState<LogEntry[]>([]);
@@ -88,32 +97,25 @@ export default function ChatPage() {
 
   const keysRef = useRef<any>(null);
   const sessionsRef = useRef<Map<string, RatchetState>>(new Map());
+  // Maps base64 IK → sender UUID, so "msg" frames can be attributed to the right conversation
+  const ikToUserIdRef = useRef<Map<string, string>>(new Map());
+  // All messages keyed by the other person's UUID
+  const conversationsRef = useRef<Map<string, Message[]>>(new Map());
+  // Mirror of recipientId state for use inside WS closure
+  const recipientIdRef = useRef("");
 
-  const hydrateSession = (raw: any): RatchetState => {
-    const b = (v: any) => new Uint8Array(Object.values(v));
-    return {
-      RK: b(raw.RK),
-      CKs: raw.CKs ? b(raw.CKs) : null,
-      CKr: raw.CKr ? b(raw.CKr) : null,
-      DHs: { pub: b(raw.DHs.pub), priv: b(raw.DHs.priv) },
-      DHr: raw.DHr ? b(raw.DHr) : null,
-      Ns: raw.Ns,
-      Nr: raw.Nr,
-      PN: raw.PN,
-    };
-  };
-
-  const saveSession = (key: string, state: RatchetState) => {
-    putValue("sessions-table", { id: key, ...state } as any).catch(
-      (err) => console.error("Failed to persist session:", err),
-    );
-  };
   const msgIdRef = useRef(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Switch displayed messages when recipient changes
+  useEffect(() => {
+    recipientIdRef.current = recipientId;
+    setMessages(conversationsRef.current.get(recipientId) ?? []);
+  }, [recipientId]);
 
   // Auto-connect on mount
   useEffect(() => {
@@ -152,10 +154,35 @@ export default function ChatPage() {
       };
       keysRef.current = hydrated;
 
+      // Load ratchet sessions
       const storedSessions = await getAllValues("sessions-table");
       for (const s of storedSessions) {
         sessionsRef.current.set(s.id, hydrateSession(s));
       }
+
+      // Load ik → userId contact map
+      const contacts = await getAllValues("contacts-table");
+      for (const c of contacts) {
+        ikToUserIdRef.current.set(c.id, c.user_id);
+      }
+
+      // Load message history into conversations map
+      const storedMessages = await getAllValues("messages-table");
+      for (const m of storedMessages) {
+        const existing = conversationsRef.current.get(m.conversation_id) ?? [];
+        conversationsRef.current.set(m.conversation_id, [
+          ...existing,
+          { id: ++msgIdRef.current, kind: m.kind, content: m.content, timestamp: m.timestamp },
+        ]);
+      }
+
+      // Build sidebar list from loaded conversations (most recent message = top)
+      const summaries: ConversationSummary[] = [];
+      for (const [id, msgs] of Array.from(conversationsRef.current.entries())) {
+        const last = msgs[msgs.length - 1];
+        summaries.unshift({ id, preview: last.content, timestamp: last.timestamp });
+      }
+      setConversations(summaries);
 
       handleConnect();
     });
@@ -169,11 +196,49 @@ export default function ChatPage() {
       consoleEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [log, consoleOpen]);
 
-  const addMessage = (kind: Message["kind"], content: string) => {
-    setMessages((prev) => [
-      ...prev,
-      { id: ++msgIdRef.current, kind, content, timestamp: now() },
-    ]);
+  const hydrateSession = (raw: any): RatchetState => {
+    const b = (v: any) => new Uint8Array(Object.values(v));
+    return {
+      RK: b(raw.RK),
+      CKs: raw.CKs ? b(raw.CKs) : null,
+      CKr: raw.CKr ? b(raw.CKr) : null,
+      DHs: { pub: b(raw.DHs.pub), priv: b(raw.DHs.priv) },
+      DHr: raw.DHr ? b(raw.DHr) : null,
+      Ns: raw.Ns,
+      Nr: raw.Nr,
+      PN: raw.PN,
+    };
+  };
+
+  const saveSession = (key: string, state: RatchetState) => {
+    putValue("sessions-table", { id: key, ...state } as any).catch(
+      (err) => console.error("Failed to persist session:", err),
+    );
+  };
+
+  const saveContact = (ik: string, senderId: string) => {
+    if (ikToUserIdRef.current.has(ik)) return;
+    ikToUserIdRef.current.set(ik, senderId);
+    putValue("contacts-table", { id: ik, user_id: senderId } as any).catch(
+      (err) => console.error("Failed to save contact:", err),
+    );
+  };
+
+  const appendMessage = (conversationId: string, kind: "sent" | "received", text: string) => {
+    const timestamp = now();
+    const msg: Message = { id: ++msgIdRef.current, kind, content: text, timestamp };
+    const existing = conversationsRef.current.get(conversationId) ?? [];
+    conversationsRef.current.set(conversationId, [...existing, msg]);
+    if (conversationId === recipientIdRef.current) {
+      setMessages([...conversationsRef.current.get(conversationId)!]);
+    }
+    // Keep sidebar in sync — move this conversation to the top with updated preview
+    setConversations((prev) => {
+      const filtered = prev.filter((c) => c.id !== conversationId);
+      return [{ id: conversationId, preview: text, timestamp }, ...filtered];
+    });
+    putValue("messages-table", { conversation_id: conversationId, kind, content: text, timestamp } as any)
+      .catch((err) => console.error("Failed to save message:", err));
   };
 
   const addLog = (direction: LogEntry["direction"], content: string) => {
@@ -225,11 +290,11 @@ export default function ChatPage() {
           envelope.ct,
           envelope.nonce,
         );
-        // Key sessions by sender's IK — pseudonymous but stable per device
         sessionsRef.current.set(envelope.ik, newState);
         saveSession(envelope.ik, newState);
-        const { text } = JSON.parse(plaintext);
-        addMessage("received", text);
+        const { sender_id, text } = JSON.parse(plaintext);
+        saveContact(envelope.ik, sender_id);
+        appendMessage(sender_id, "received", text);
 
       } else if (envelope.type === "msg") {
         const state = sessionsRef.current.get(envelope.ik);
@@ -245,8 +310,13 @@ export default function ChatPage() {
         );
         sessionsRef.current.set(envelope.ik, newState);
         saveSession(envelope.ik, newState);
+        const senderId = ikToUserIdRef.current.get(envelope.ik);
+        if (!senderId) {
+          console.error("Unknown sender IK, cannot attribute message", envelope.ik);
+          return;
+        }
         const { text } = JSON.parse(plaintext);
-        addMessage("received", text);
+        appendMessage(senderId, "received", text);
       }
     };
 
@@ -313,6 +383,8 @@ export default function ChatPage() {
       socketRef.current!.send(frame);
       addLog("sent", frame);
     }
+
+    appendMessage(recipientId, "sent", text);
   };
 
   const handleSend = (e: React.FormEvent<HTMLFormElement>) => {
@@ -320,10 +392,9 @@ export default function ChatPage() {
     if (!msgInput.trim()) return;
     const text = msgInput;
     setMsgInput("");
-    addMessage("sent", text);
     sendMessage(text).catch((err) => {
       console.error("Send failed:", err);
-      addMessage("system", "Failed to send message.");
+      appendMessage(recipientId, "system" as any, "Failed to send message.");
     });
   };
 
@@ -366,6 +437,35 @@ export default function ChatPage() {
           </button>
         </div>
       </nav>
+
+      <div className="chat-body">
+        {/* Sidebar */}
+        <aside className="chat-sidebar">
+          <div className="sidebar-header">Conversations</div>
+          <div className="sidebar-conversations">
+            {conversations.length === 0 ? (
+              <p className="sidebar-empty">No conversations yet.<br />Paste a recipient ID to start.</p>
+            ) : (
+              conversations.map((conv) => (
+                <div
+                  key={conv.id}
+                  className={`conv-item${conv.id === recipientId ? " conv-item-active" : ""}`}
+                  onClick={() => setRecipientId(conv.id)}
+                >
+                  <div className="conv-avatar">{conv.id.slice(0, 2).toUpperCase()}</div>
+                  <div className="conv-info">
+                    <div className="conv-id">{conv.id.slice(0, 8)}…</div>
+                    <div className="conv-preview">{conv.preview}</div>
+                  </div>
+                  <span className="conv-time">{conv.timestamp}</span>
+                </div>
+              ))
+            )}
+          </div>
+        </aside>
+
+        {/* Main */}
+        <div className="chat-main">
 
       {/* To: row */}
       <div className="to-row">
@@ -492,6 +592,8 @@ export default function ChatPage() {
           </svg>
         </button>
       </form>
+        </div> {/* .chat-main */}
+      </div> {/* .chat-body */}
     </div>
   );
 }
