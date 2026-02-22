@@ -10,7 +10,7 @@ pub fn create_jwt(
 ) -> Result<String, jsonwebtoken::errors::Error> {
     let secret = env::var("JWT_SECRET").expect("no JWT_SECRET set");
     let now = Utc::now();
-    let expiration = now + Duration::from_secs(15 * 60); // Token valid for 15 minutes
+    let expiration = now + Duration::from_secs(60 * 60 * 24); // Token valid for 24 hours
 
     let claims = Claims {
         sub: user_id.to_owned(),

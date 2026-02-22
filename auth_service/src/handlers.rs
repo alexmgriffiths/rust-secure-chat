@@ -70,7 +70,7 @@ pub async fn login(
         Ok(user) => user,
         Err(err) => {
             let msg = format!("DB Error: {}", err);
-            return (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response();
+            return (StatusCode::UNAUTHORIZED, msg).into_response();
         }
     };
     if !verify_password(&payload.password, &user.password_hash) {

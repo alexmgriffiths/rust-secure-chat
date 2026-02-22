@@ -32,21 +32,17 @@ pub async fn handle_send_command(
 
     // Send ServerMsg::Ack back to sender
     // We send ACKS back to say "Hey this message has persisted in the database, go ahead and commit to updating your ratchet state"
-    // There's also a smal bug in here that could crash.  thserver
-    // If a client disconnects fast enough the server will shit itself
-    // TODO: Fix panic
-    let client_sender = router_state
-        .connections
-        .get(&sender_client_id)
-        .unwrap()
-        .clone(); // It's really unlikely this fails
-    router_state.send_or_disconnect_server_msg(
-        sender_client_id,
-        &client_sender,
-        &crate::protocol::ServerMsg::Ack {
-            message_id: message_id.to_string(),
-        },
-    );
+    let client_sender = router_state.connections.get(&sender_client_id).cloned();
+
+    if let Some(client_sender) = client_sender {
+        router_state.send_or_disconnect_server_msg(
+            sender_client_id,
+            &client_sender,
+            &crate::protocol::ServerMsg::Ack {
+                message_id: message_id.to_string(),
+            },
+        );
+    }
 
     // Create the payload, we might need it later and don't want to make it in the loop
     let pubsub_payload = match serde_json::to_string(&PubSubPayload {

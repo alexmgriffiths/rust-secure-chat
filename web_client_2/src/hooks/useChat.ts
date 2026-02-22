@@ -100,6 +100,9 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
   const msgIdRef = useRef(0);
   const logIdRef = useRef(0);
   const pendingAcks = useRef<Map<string, { newState: RatchetState; sessionKey: string }>>(new Map());
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectDelayRef = useRef(1000);
+  const intentionalDisconnectRef = useRef(false);
 
   const setRecipientId = (id: string) => {
     recipientIdRef.current = id;
@@ -149,6 +152,8 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
   };
 
   const connect = () => {
+    intentionalDisconnectRef.current = false;
+
     if (isJwtExpired(token)) {
       onAuthFailure();
       return;
@@ -159,6 +164,7 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
 
     ws.onopen = () => {
       setWsStatus("connected");
+      reconnectDelayRef.current = 1000;
       const lastSeq = parseInt(localStorage.getItem(`relay_last_seq_${userId}`) ?? "0");
       const frame = JSON.stringify({ type: "authenticate", token, last_seq: lastSeq });
       ws.send(frame);
@@ -239,11 +245,27 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
       }
     };
 
-    ws.onclose = () => setWsStatus("disconnected");
+    ws.onclose = () => {
+      setWsStatus("disconnected");
+      if (intentionalDisconnectRef.current) return;
+      if (isJwtExpired(token)) {
+        onAuthFailure();
+        return;
+      }
+      const delay = reconnectDelayRef.current;
+      reconnectDelayRef.current = Math.min(delay * 2, 30000);
+      reconnectTimeoutRef.current = setTimeout(() => connect(), delay);
+    };
+
     ws.onerror = () => setWsStatus("disconnected");
   };
 
   const disconnect = () => {
+    intentionalDisconnectRef.current = true;
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
     socketRef.current?.close();
   };
 

@@ -30,17 +30,21 @@ Message history is stored locally in IndexedDB because there's no way to re-decr
 - Message history persisted locally in IndexedDB
 - Conversation sidebar showing all active threads
 - JWT expiry detection — redirects to login before the socket even opens
-- Safe ratchet state handling — state only advances after a message is confirmed sent, so a failed send can't corrupt the session
-- Offline message delivery -
-- Multi-device support
+- Safe ratchet state handling — ratchet state advances in-memory immediately on encrypt and persists to IndexedDB only after the server ACKs the message, preventing key reuse on rapid sends while keeping IndexedDB consistent
+- Offline message delivery — every message is persisted to Postgres before the server ACKs it; each device tracks a sequence cursor so it only fetches messages it hasn't seen yet on reconnect
+- Multi-device support — each device is an independent X3DH identity; senders encrypt separately for every recipient device and sync sent messages to their own other devices; device ID filtering ensures each device only decrypts frames addressed to it
+- WebSocket auto-reconnect — exponential backoff from 1s up to 30s on any unintentional disconnect; seamlessly re-authenticates and flushes missed messages via the sequence cursor
+- Redis-backed multi-server routing — connections are tracked in Redis so messages route correctly across socket server instances; pub/sub delivers to the right server in real time
 
 ## What still needs doing
 
-**User discovery** — Right now you have to paste someone's UUID to message them, which is terrible. A simple username search endpoint on the auth service would fix this, and the sidebar could show names instead of truncated IDs.
+**User discovery** — Right now you have to paste someone's UUID to message them. A simple username search endpoint on the auth service would fix this, and the sidebar could show names instead of truncated IDs.
 
 **OPK replenishment** — Each new session from a new contact consumes one of your one-time prekeys. You uploaded 10 on registration and never get more. The client should check how many are left on the server after initiating a session and top up when running low.
 
-**Token refresh** — JWTs expire after 15 minutes. There's no refresh token flow, so users have to log in again every 15 minutes. Either a refresh token endpoint or a much longer TTL for development would help.
+**Skipped message keys** — The Double Ratchet implementation doesn't store keys for skipped messages. Out-of-order delivery would break the receive chain. The fix is a per-session map of `(ratchet_pub, message_number) → message_key` checked before the normal decrypt path.
+
+**Session reset** — If a ratchet session gets permanently desynced there's no recovery path short of clearing IndexedDB. A "reset conversation" button that drops all sessions for a contact and forces a fresh X3DH init on the next message would fix this.
 
 ## Running it
 
