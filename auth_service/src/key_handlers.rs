@@ -15,7 +15,8 @@ use crate::{
 #[derive(Deserialize)]
 pub struct UploadDeviceRequest {
     pub device_name: String,
-    pub identity_key_public: Vec<u8>,
+    pub identity_key_ed25519_public: Vec<u8>,
+    pub identity_key_x25519_public: Vec<u8>,
     pub signed_prekey_id: i32,
     pub signed_prekey_public: Vec<u8>,
     pub signed_prekey_signature: Vec<u8>,
@@ -37,7 +38,8 @@ pub struct UploadDeviceResponse {
 #[derive(Serialize)]
 pub struct PreKeyBundle {
     pub device_id: i64,
-    pub identity_key_public: Vec<u8>,
+    pub identity_key_ed25519_public: Vec<u8>,
+    pub identity_key_x25519_public: Vec<u8>,
     pub signed_prekey_id: i32,
     pub signed_prekey_public: Vec<u8>,
     pub signed_prekey_signature: Vec<u8>,
@@ -59,14 +61,15 @@ pub async fn upload_device(
     // First, insert the device
     let device_result = sqlx::query_as::<_, Device>(
         r#"
-        INSERT INTO devices (user_id, device_name, identity_key_public, signed_prekey_id, signed_prekey_public, signed_prekey_signature)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        RETURNING id, user_id, device_name, identity_key_public, signed_prekey_id, signed_prekey_public, signed_prekey_signature, created_at
+        INSERT INTO devices (user_id, device_name, identity_key_ed25519_public, identity_key_x25519_public, signed_prekey_id, signed_prekey_public, signed_prekey_signature)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING id, user_id, device_name, identity_key_ed25519_public, identity_key_x25519_public, signed_prekey_id, signed_prekey_public, signed_prekey_signature, created_at
         "#,
     )
     .bind(user_id)
     .bind(&payload.device_name)
-    .bind(&payload.identity_key_public)
+    .bind(&payload.identity_key_ed25519_public)
+    .bind(&payload.identity_key_x25519_public)
     .bind(payload.signed_prekey_id)
     .bind(&payload.signed_prekey_public)
     .bind(&payload.signed_prekey_signature)
@@ -98,7 +101,10 @@ pub async fn upload_device(
         StatusCode::CREATED,
         Json(UploadDeviceResponse {
             device_id: device.id,
-            message: format!("Device created with {} one-time prekeys", payload.one_time_prekeys.len()),
+            message: format!(
+                "Device created with {} one-time prekeys",
+                payload.one_time_prekeys.len()
+            ),
         }),
     )
         .into_response()
@@ -113,8 +119,8 @@ pub async fn get_prekey_bundle(
     // For PoC: just get the first device for this user
     // In production: handle multiple devices
     let device_result = sqlx::query_as::<_, Device>(
-        "SELECT id, user_id, device_name, identity_key_public, signed_prekey_id, signed_prekey_public, signed_prekey_signature, created_at 
-         FROM devices WHERE user_id = $1 LIMIT 1",
+        "SELECT id, user_id, device_name, identity_key_ed25519_public, identity_key_x25519_public, signed_prekey_id, signed_prekey_public, signed_prekey_signature, created_at 
+         FROM devices WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1",
     )
     .bind(user_id)
     .fetch_one(&state.db)
@@ -141,7 +147,8 @@ pub async fn get_prekey_bundle(
 
     let bundle = PreKeyBundle {
         device_id: device.id,
-        identity_key_public: device.identity_key_public,
+        identity_key_ed25519_public: device.identity_key_ed25519_public,
+        identity_key_x25519_public: device.identity_key_x25519_public,
         signed_prekey_id: device.signed_prekey_id,
         signed_prekey_public: device.signed_prekey_public,
         signed_prekey_signature: device.signed_prekey_signature,
@@ -160,7 +167,7 @@ pub async fn list_user_devices(
     Path(user_id): Path<Uuid>,
 ) -> impl IntoResponse {
     let devices = sqlx::query_as::<_, Device>(
-        "SELECT id, user_id, device_name, identity_key_public, signed_prekey_id, signed_prekey_public, signed_prekey_signature, created_at 
+        "SELECT id, user_id, device_name, identity_key_ed25519_public, identity_key_x25519_public, signed_prekey_id, signed_prekey_public, signed_prekey_signature, created_at 
          FROM devices WHERE user_id = $1",
     )
     .bind(user_id)

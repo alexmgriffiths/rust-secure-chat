@@ -1,6 +1,7 @@
 mod db;
 mod handlers;
 mod jwt;
+pub mod key_handlers;
 mod models;
 mod routes;
 
@@ -9,7 +10,7 @@ use std::env;
 
 #[tokio::main]
 async fn main() {
-    dotenvy::dotenv().unwrap();
+    dotenvy::dotenv().ok();
 
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
     let pool = connect(&database_url).await;

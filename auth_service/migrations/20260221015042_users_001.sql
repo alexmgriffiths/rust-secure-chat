@@ -20,7 +20,8 @@ CREATE TABLE devices (
     device_name VARCHAR(64) NOT NULL,
     
     -- Long-term identity key (public part)
-    identity_key_public BYTEA NOT NULL,
+    identity_key_ed25519_public BYTEA NOT NULL,
+    identity_key_x25519_public BYTEA NOT NULL,
     
     -- Current signed prekey for key exchange
     signed_prekey_id INTEGER NOT NULL,

@@ -47,30 +47,31 @@ pub struct LoginResponse {
     pub updated_at: DateTime<Utc>,
 }
 
-// #[derive(Serialize, FromRow)]
-// pub struct Device {
-//     pub id: i64,
-//     pub user_id: Uuid,
-//     pub device_name: String,
-//     pub identity_key_public: Vec<u8>,
-//     pub signed_prekey_id: i32,
-//     pub signed_prekey_public: Vec<u8>,
-//     pub signed_prekey_signature: Vec<u8>,
+#[derive(Serialize, FromRow)]
+pub struct Device {
+    pub id: i64,
+    pub user_id: Uuid,
+    pub device_name: String,
+    pub identity_key_ed25519_public: Vec<u8>,
+    pub identity_key_x25519_public: Vec<u8>,
+    pub signed_prekey_id: i32,
+    pub signed_prekey_public: Vec<u8>,
+    pub signed_prekey_signature: Vec<u8>,
 
-//     #[serde(with = "chrono::serde::ts_seconds")]
-//     pub created_at: DateTime<Utc>,
-// }
+    #[serde(with = "chrono::serde::ts_seconds")]
+    pub created_at: DateTime<Utc>,
+}
 
-// #[derive(Serialize, FromRow)]
-// pub struct OneTimePreKey {
-//     pub id: i64,
-//     pub device_id: i64,
-//     pub key_id: i32,
-//     pub public_key: Vec<u8>,
+#[derive(Serialize, FromRow)]
+pub struct OneTimePreKey {
+    pub id: i64,
+    pub device_id: i64,
+    pub key_id: i32,
+    pub public_key: Vec<u8>,
 
-//     #[serde(with = "chrono::serde::ts_seconds")]
-//     pub created_at: DateTime<Utc>,
-// }
+    #[serde(with = "chrono::serde::ts_seconds")]
+    pub created_at: DateTime<Utc>,
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct Claims {
