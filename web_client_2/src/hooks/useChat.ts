@@ -99,6 +99,7 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
   const recipientIdRef = useRef("");
   const msgIdRef = useRef(0);
   const logIdRef = useRef(0);
+  const pendingAcks = useRef<Map<string, { newState: RatchetState; sessionKey: string }>>(new Map());
 
   const setRecipientId = (id: string) => {
     recipientIdRef.current = id;
@@ -173,6 +174,16 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
         return;
       }
 
+      if (parsed.type === "ack") {
+        const pending = pendingAcks.current.get(parsed.message_id);
+        if (pending) {
+          sessionsRef.current.set(pending.sessionKey, pending.newState);
+          saveSession(pending.sessionKey, pending.newState);
+          pendingAcks.current.delete(parsed.message_id);
+        }
+        return;
+      }
+
       if (parsed.type !== "delivery") return;
 
       const envelope = JSON.parse(parsed.payload);
@@ -232,6 +243,7 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
     const myIK = toBase64(keysRef.current.publicUpload.identity_x25519_public);
     const plaintext = JSON.stringify({ sender_id: userId, text });
     const existingSession = sessionsRef.current.get(rid);
+    const message_id = crypto.randomUUID();
 
     if (!existingSession) {
       // fetchPrekeyBundle uses the JWT over HTTP — if expired it throws before state is touched
@@ -250,20 +262,16 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
         ct,
         nonce,
       });
-      const frame = JSON.stringify({ type: "send", mailbox_id: rid, payload: envelope });
-      // Send first — if this throws, state is never committed
+      const frame = JSON.stringify({ type: "send", message_id, mailbox_id: rid, payload: envelope });
       socketRef.current.send(frame);
-      sessionsRef.current.set(rid, newState);
-      saveSession(rid, newState);
+      pendingAcks.current.set(message_id, { newState, sessionKey: rid });
       addLog("sent", frame);
     } else {
       const { state: newState, header, ct, nonce } = ratchetEncrypt(existingSession, plaintext);
       const envelope = JSON.stringify({ type: "msg", ik: myIK, ...header, ct, nonce });
-      const frame = JSON.stringify({ type: "send", mailbox_id: rid, payload: envelope });
-      // Send first — if this throws, state is never committed
+      const frame = JSON.stringify({ type: "send", message_id, mailbox_id: rid, payload: envelope });
       socketRef.current.send(frame);
-      sessionsRef.current.set(rid, newState);
-      saveSession(rid, newState);
+      pendingAcks.current.set(message_id, { newState, sessionKey: rid });
       addLog("sent", frame);
     }
 

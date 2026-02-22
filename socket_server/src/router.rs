@@ -1,11 +1,13 @@
 use std::env;
 
 use crate::{
+    db::DbPool,
     handlers::{
         connected::handle_connected_event, disconnected::handle_disconnected_event,
-        received::handle_received_event,
+        pubsub::handle_pubsub_delivery_event, received::handle_received_event,
     },
     protocol::Event,
+    redis_helper::RedisHelper,
     state::RouterState,
 };
 
@@ -17,10 +19,15 @@ use tokio::{
 };
 use tokio_tungstenite::{WebSocketStream, tungstenite::Message};
 
-pub async fn handle_router(mut received: UnboundedReceiver<Event>) {
+pub async fn handle_router(
+    mut received: UnboundedReceiver<Event>,
+    db: DbPool,
+    redis: RedisHelper,
+    server_id: String,
+) {
     let decoding_key =
         DecodingKey::from_secret(env::var("JWT_SECRET").expect("no JWT_SECRET set").as_ref());
-    let mut router_state: RouterState = RouterState::new(decoding_key);
+    let mut router_state: RouterState = RouterState::new(decoding_key, db, redis, server_id);
 
     while let Some(ev) = received.recv().await {
         match ev {
@@ -28,10 +35,19 @@ pub async fn handle_router(mut received: UnboundedReceiver<Event>) {
                 handle_connected_event(&mut router_state, client_id, out_tx);
             }
             Event::Received { client_id, command } => {
-                handle_received_event(&mut router_state, client_id, command);
+                handle_received_event(&mut router_state, client_id, command).await;
             }
             Event::Disconnected { client_id } => {
-                handle_disconnected_event(&mut router_state, client_id);
+                handle_disconnected_event(&mut router_state, client_id).await;
+            }
+
+            Event::PubSubDelivery {
+                mailbox_id,
+                payload,
+                message_id,
+            } => {
+                handle_pubsub_delivery_event(&mut router_state, mailbox_id, payload, message_id)
+                    .await;
             }
         }
     }

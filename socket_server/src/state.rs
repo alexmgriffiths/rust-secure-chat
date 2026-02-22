@@ -6,7 +6,9 @@ use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
 use crate::{
+    db::DbPool,
     protocol::ServerMsg,
+    redis_helper::RedisHelper,
     send::{SendServerMsgError, send_server_msg},
 };
 
@@ -15,15 +17,27 @@ pub struct RouterState {
     pub connections: HashMap<u64, UnboundedSender<Message>>,
     pub connection_to_mailbox: HashMap<u64, Uuid>, // Given a connection, which mailbox does it own?
     pub mailbox_to_connections: HashMap<Uuid, Vec<u64>>, // Given a mailbox, which connections are active for it?
+
+    pub db: DbPool,
+    pub redis: RedisHelper,
+    pub server_id: String,
 }
 
 impl RouterState {
-    pub fn new(decoding_key: DecodingKey) -> RouterState {
+    pub fn new(
+        decoding_key: DecodingKey,
+        db: DbPool,
+        redis: RedisHelper,
+        server_id: String,
+    ) -> RouterState {
         RouterState {
             decoding_key,
             connections: HashMap::new(),
             connection_to_mailbox: HashMap::new(),
             mailbox_to_connections: HashMap::new(),
+            db,
+            redis,
+            server_id,
         }
     }
 

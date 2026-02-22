@@ -14,6 +14,10 @@ async fn main() {
 
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
     let pool = connect(&database_url).await;
+    if let Err(e) = sqlx::migrate!("./migrations").run(&pool).await {
+        eprintln!("Failed to run migrations: {e}");
+        return;
+    };
 
     let state = AppState { db: pool };
     let app = create_router(state);

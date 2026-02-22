@@ -5,7 +5,11 @@ use crate::commands::send::handle_send_command;
 use crate::protocol::ServerMsg;
 use crate::{protocol::Command, state::RouterState};
 
-pub fn handle_received_event(router_state: &mut RouterState, client_id: u64, command: Command) {
+pub async fn handle_received_event(
+    router_state: &mut RouterState,
+    client_id: u64,
+    command: Command,
+) {
     let Some(tx) = router_state.connections.get(&client_id).cloned() else {
         return;
     };
@@ -22,7 +26,7 @@ pub fn handle_received_event(router_state: &mut RouterState, client_id: u64, com
                 );
                 return;
             }
-            let user_id = match handle_authenticate_command(router_state, client_id, &token) {
+            let user_id = match handle_authenticate_command(router_state, client_id, &token).await {
                 Err(_) => {
                     // TODO: Handle actual error rather than hard-coding maybe
                     router_state.send_or_disconnect_server_msg(
@@ -47,6 +51,7 @@ pub fn handle_received_event(router_state: &mut RouterState, client_id: u64, com
         Command::Send {
             mailbox_id,
             payload,
+            message_id,
         } => {
             // We need to make sure the current user is authed
             if !router_state.connection_to_mailbox.contains_key(&client_id) {
@@ -74,8 +79,31 @@ pub fn handle_received_event(router_state: &mut RouterState, client_id: u64, com
                 }
             };
 
+            let parsed_message_id = match Uuid::try_parse(&message_id) {
+                Ok(mid) => mid,
+                Err(_) => {
+                    router_state.send_or_disconnect_server_msg(
+                        client_id,
+                        &tx,
+                        &ServerMsg::Error {
+                            message: "Failed to parse message_id".to_string(),
+                        },
+                    );
+                    return;
+                }
+            };
+
             // TODO: Error handling in this function so that it can actually return an error
-            if handle_send_command(router_state, &payload, parsed_mailbox_id).is_err() {
+            if handle_send_command(
+                router_state,
+                &payload,
+                parsed_mailbox_id,
+                parsed_message_id,
+                client_id,
+            )
+            .await
+            .is_err()
+            {
                 router_state.send_or_disconnect_server_msg(
                     client_id,
                     &tx,

@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sqlx::prelude::FromRow;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
@@ -7,8 +8,14 @@ use uuid::Uuid;
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Command {
-    Authenticate { token: String },
-    Send { mailbox_id: String, payload: String },
+    Authenticate {
+        token: String,
+    },
+    Send {
+        mailbox_id: String,
+        payload: String,
+        message_id: String,
+    },
 }
 
 #[derive(Serialize, Debug)]
@@ -17,6 +24,7 @@ pub enum ServerMsg {
     Delivery { payload: String },
     Info { message: String },
     Error { message: String },
+    Ack { message_id: String },
 }
 
 pub enum Event {
@@ -31,10 +39,16 @@ pub enum Event {
     Disconnected {
         client_id: u64,
     },
+    PubSubDelivery {
+        mailbox_id: Uuid,
+        payload: String,
+        message_id: Uuid,
+    },
 }
 
 // TODO: Move to models, or it's own folder idk yet
 #[derive(Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub struct UserInfo {
     pub id: Uuid,
     pub username: String,
@@ -47,9 +61,33 @@ pub struct UserInfo {
 
 // TODO: This too
 #[derive(Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub struct Claims {
     pub sub: String,
     pub user: UserInfo,
     pub exp: usize,
     pub iat: usize,
+}
+
+// TODO: Probably could go in a redis folder or something who fucking know
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub struct PubSubPayload {
+    pub mailbox_id: Uuid,
+    pub message_id: Uuid,
+    pub payload: String,
+}
+
+#[derive(Serialize, Deserialize, FromRow)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub struct PendingMessage {
+    pub id: Uuid,
+    pub mailbox_id: Uuid,
+    pub payload: String,
+    #[serde(with = "chrono::serde::ts_seconds")]
+    pub created_at: DateTime<Utc>,
+
+    // Not sure how to handle this since it's a nullable field
+    #[serde(with = "chrono::serde::ts_seconds_option")]
+    pub delivered_at: Option<DateTime<Utc>>,
 }
