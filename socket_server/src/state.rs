@@ -70,6 +70,29 @@ impl RouterState {
         }
     }
 
+    pub fn deliver_typing_to_mailbox(&mut self, mailbox_id: Uuid, payload: &str, is_stop: bool) {
+        let message = if is_stop {
+            ServerMsg::StopTyping { payload: payload.to_string() }
+        } else {
+            ServerMsg::Typing { payload: payload.to_string() }
+        };
+
+        let connections = match self.mailbox_to_connections.get(&mailbox_id) {
+            Some(c) => c,
+            None => return, // recipient offline — typing indicators are ephemeral, just drop
+        };
+        let clients_to_send_to: Vec<u64> = connections.iter().copied().collect();
+        let mut senders: Vec<(u64, tokio::sync::mpsc::UnboundedSender<tokio_tungstenite::tungstenite::Message>)> = vec![];
+        for c in clients_to_send_to {
+            if let Some(conn) = self.connections.get(&c) {
+                senders.push((c, conn.clone()));
+            }
+        }
+        for (client_id, tx) in senders {
+            self.send_or_disconnect_server_msg(client_id, &tx, &message);
+        }
+    }
+
     pub fn deliver_to_mailbox(&mut self, mailbox_id: Uuid, seq: i64, payload: &str) {
         let message = ServerMsg::Delivery {
             seq,

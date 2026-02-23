@@ -35,16 +35,31 @@ Message history is stored locally in IndexedDB because there's no way to re-decr
 - Multi-device support — each device is an independent X3DH identity; senders encrypt separately for every recipient device and sync sent messages to their own other devices; device ID filtering ensures each device only decrypts frames addressed to it
 - WebSocket auto-reconnect — exponential backoff from 1s up to 30s on any unintentional disconnect; seamlessly re-authenticates and flushes missed messages via the sequence cursor
 - Redis-backed multi-server routing — connections are tracked in Redis so messages route correctly across socket server instances; pub/sub delivers to the right server in real time
+- User discovery — username search on the auth service with trigram similarity; sidebar shows names instead of truncated IDs; new conversations started by searching, not pasting UUIDs
 
 ## What still needs doing
-
-**User discovery** — Right now you have to paste someone's UUID to message them. A simple username search endpoint on the auth service would fix this, and the sidebar could show names instead of truncated IDs.
 
 **OPK replenishment** — Each new session from a new contact consumes one of your one-time prekeys. You uploaded 10 on registration and never get more. The client should check how many are left on the server after initiating a session and top up when running low.
 
 **Skipped message keys** — The Double Ratchet implementation doesn't store keys for skipped messages. Out-of-order delivery would break the receive chain. The fix is a per-session map of `(ratchet_pub, message_number) → message_key` checked before the normal decrypt path.
 
 **Session reset** — If a ratchet session gets permanently desynced there's no recovery path short of clearing IndexedDB. A "reset conversation" button that drops all sessions for a contact and forces a fresh X3DH init on the next message would fix this.
+
+High value, low effort:
+
+Typing indicators — A { type: "typing", mailbox_id } WebSocket frame, no crypto needed, huge perceived liveness improvement. Server just forwards it like any other frame, no persistence.
+OPK replenishment — Already in your TODO and it's a real security gap. After any X3DH init, fire a check: GET /users/:id/devices to see remaining OPK count, top up if below a threshold. Maybe 20 lines of client code + a new auth service endpoint.
+Key verification / safety numbers — Show a fingerprint derived from both parties' identity keys so users can verify they're not being MITM'd. Pure UI, no protocol changes. Builds trust in the E2EE claim.
+Medium value, medium effort:
+
+Skipped message keys — Also in your TODO. Out-of-order delivery is a real scenario (mobile networks, reconnects). Without it the ratchet breaks permanently on any reordering, which is a serious usability hole.
+Session reset — The escape hatch when things go wrong. A "Reset conversation" button that wipes all sessions for a contact and forces fresh X3DH on next send. Without it a desynced session is unrecoverable short of clearing all of IndexedDB.
+Delivery/read receipts — delivered_at already exists in the DB. "Read" would be a new ack frame the client sends when a message is displayed. Small protocol addition, big UX improvement.
+High value, high effort (probably not now):
+
+Group chats — Needs Sender Keys (Signal's group protocol) or a simpler fan-out approach. Major protocol work.
+Media sharing — Needs a separate upload service and encrypted attachment handling.
+Push notifications — Web Push API for browsers, then APNs/FCM for mobile. Significant infra.
 
 ## Running it
 

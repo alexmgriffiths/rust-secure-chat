@@ -18,6 +18,14 @@ pub enum Command {
         payload: String,
         message_id: String,
     },
+    Typing {
+        mailbox_id: String,
+        payload: String,
+    },
+    StopTyping {
+        mailbox_id: String,
+        payload: String,
+    },
 }
 
 #[derive(Serialize, Debug)]
@@ -27,6 +35,8 @@ pub enum ServerMsg {
     Info { message: String },
     Error { message: String },
     Ack { message_id: String },
+    Typing { payload: String },
+    StopTyping { payload: String },
 }
 
 pub enum Event {

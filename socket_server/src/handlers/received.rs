@@ -121,5 +121,29 @@ pub async fn handle_received_event(
                 return;
             };
         }
+        Command::Typing {
+            mailbox_id,
+            payload,
+        } => {
+            if !router_state.connection_to_mailbox.contains_key(&client_id) {
+                return;
+            }
+            let Ok(parsed_mailbox_id) = Uuid::try_parse(&mailbox_id) else {
+                return;
+            };
+            router_state.deliver_typing_to_mailbox(parsed_mailbox_id, &payload, false);
+        }
+        Command::StopTyping {
+            mailbox_id,
+            payload,
+        } => {
+            if !router_state.connection_to_mailbox.contains_key(&client_id) {
+                return;
+            }
+            let Ok(parsed_mailbox_id) = Uuid::try_parse(&mailbox_id) else {
+                return;
+            };
+            router_state.deliver_typing_to_mailbox(parsed_mailbox_id, &payload, true);
+        }
     }
 }

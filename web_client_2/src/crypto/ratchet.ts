@@ -4,6 +4,8 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { chacha20poly1305 } from "@noble/ciphers/chacha.js";
 import { toBase64, fromBase64 } from "./x3dh";
 
+const MAX_SKIP = 1000;
+
 export type RatchetKeypair = { pub: Uint8Array; priv: Uint8Array };
 
 export type RatchetState = {
@@ -15,6 +17,8 @@ export type RatchetState = {
   Ns: number;
   Nr: number;
   PN: number;
+  skippedKeys: Map<string, Uint8Array>; // `${dh_pub_b64}:${n}` -> MK
+  typingKey: Uint8Array; // derived from masterSecret, never rotates, used for typing indicators
 };
 
 export type RatchetHeader = {
@@ -50,17 +54,38 @@ function arraysEqual(a: Uint8Array, b: Uint8Array): boolean {
   return true;
 }
 
+function skipMessageKeys(state: RatchetState, until: number): RatchetState {
+  if (until - state.Nr > MAX_SKIP) {
+    throw new Error(`Too many skipped messages: gap of ${until - state.Nr}`);
+  }
+  const newSkipped = new Map(state.skippedKeys);
+  let { CKr, Nr } = state;
+  const dhKey = toBase64(state.DHr!);
+  while (Nr < until) {
+    const { newCK, MK } = KDF_CK(CKr!);
+    newSkipped.set(`${dhKey}:${Nr}`, MK);
+    CKr = newCK;
+    Nr++;
+  }
+  return { ...state, CKr, Nr, skippedKeys: newSkipped };
+}
+
+function deriveTypingKey(masterSecret: Uint8Array): Uint8Array {
+  return hkdf(sha256, masterSecret, new Uint8Array(32), new TextEncoder().encode("typing"), 32);
+}
+
 export function initRatchetSender(
   masterSecret: Uint8Array,
   ekPriv: Uint8Array,
   ekPub: Uint8Array,
   bobSPKPub: Uint8Array,
 ): RatchetState {
+  const typingKey = deriveTypingKey(masterSecret);
   const DHs: RatchetKeypair = { priv: ekPriv, pub: ekPub };
   const DHr = bobSPKPub;
   const dhOut = x25519.getSharedSecret(DHs.priv, DHr);
   const { newRK, newCK } = KDF_RK(masterSecret, dhOut);
-  return { RK: newRK, CKs: newCK, CKr: null, DHs, DHr, Ns: 0, Nr: 0, PN: 0 };
+  return { RK: newRK, CKs: newCK, CKr: null, DHs, DHr, Ns: 0, Nr: 0, PN: 0, skippedKeys: new Map(), typingKey };
 }
 
 export function initRatchetReceiver(
@@ -68,6 +93,7 @@ export function initRatchetReceiver(
   spkPriv: Uint8Array,
   spkPub: Uint8Array,
 ): RatchetState {
+  const typingKey = deriveTypingKey(masterSecret);
   const DHs: RatchetKeypair = { priv: spkPriv, pub: spkPub };
   return {
     RK: masterSecret,
@@ -78,7 +104,20 @@ export function initRatchetReceiver(
     Ns: 0,
     Nr: 0,
     PN: 0,
+    skippedKeys: new Map(),
+    typingKey,
   };
+}
+
+export function encryptTyping(typingKey: Uint8Array, payload: string): { ct: string; nonce: string } {
+  const nonce = crypto.getRandomValues(new Uint8Array(12));
+  const ct = chacha20poly1305(typingKey, nonce).encrypt(new TextEncoder().encode(payload));
+  return { ct: toBase64(ct), nonce: toBase64(nonce) };
+}
+
+export function decryptTyping(typingKey: Uint8Array, ct: string, nonce: string): string {
+  const plaintext = chacha20poly1305(typingKey, fromBase64(nonce)).decrypt(fromBase64(ct));
+  return new TextDecoder().decode(plaintext);
 }
 
 export function ratchetEncrypt(
@@ -109,10 +148,28 @@ export function ratchetDecrypt(
   const nonceBytes = fromBase64(nonce);
   const newDHr = fromBase64(header.dh);
 
-  let s: RatchetState = { ...state };
+  let s: RatchetState = { ...state, skippedKeys: new Map(state.skippedKeys) };
+
+  // Check skipped keys cache first — handles out-of-order / late-arriving messages
+  const skippedKey = `${header.dh}:${header.n}`;
+  if (s.skippedKeys.has(skippedKey)) {
+    const MK = s.skippedKeys.get(skippedKey)!;
+    const newSkipped = new Map(s.skippedKeys);
+    newSkipped.delete(skippedKey);
+    const plaintextBytes = chacha20poly1305(MK, nonceBytes).decrypt(ctBytes);
+    return {
+      state: { ...s, skippedKeys: newSkipped },
+      plaintext: new TextDecoder().decode(plaintextBytes),
+    };
+  }
 
   // DH ratchet step — triggered whenever we see a new ratchet public key from the other side
   if (s.DHr === null || !arraysEqual(newDHr, s.DHr)) {
+    // Save any skipped message keys on the current receiving chain before rotating
+    if (s.DHr !== null && s.CKr !== null) {
+      s = skipMessageKeys(s, header.pn);
+    }
+
     s = { ...s, PN: s.Ns, Ns: 0, Nr: 0 };
 
     // Derive the new receiving chain using the other side's new ratchet key
@@ -127,6 +184,9 @@ export function ratchetDecrypt(
     const { newRK: rk2, newCK: cks } = KDF_RK(s.RK, dhOut2);
     s = { ...s, RK: rk2, CKs: cks, DHs: { priv: newPriv, pub: newPub } };
   }
+
+  // Skip ahead to message n, caching any keys we step over
+  s = skipMessageKeys(s, header.n);
 
   const { newCK, MK } = KDF_CK(s.CKr!);
   const plaintextBytes = chacha20poly1305(MK, nonceBytes).decrypt(ctBytes);

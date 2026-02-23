@@ -9,6 +9,8 @@ import {
 } from "../crypto/x3dh";
 import {
   RatchetState,
+  decryptTyping,
+  encryptTyping,
   initRatchetReceiver,
   initRatchetSender,
   ratchetDecrypt,
@@ -37,6 +39,9 @@ function hydrateBytes(v: any): Uint8Array {
 
 function hydrateSession(raw: any): RatchetState {
   const b = hydrateBytes;
+  const skippedKeys = new Map<string, Uint8Array>(
+    (raw.skippedKeys ?? []).map(([k, v]: [string, number[]]) => [k, new Uint8Array(v)]),
+  );
   return {
     RK: b(raw.RK),
     CKs: raw.CKs ? b(raw.CKs) : null,
@@ -46,6 +51,10 @@ function hydrateSession(raw: any): RatchetState {
     Ns: raw.Ns,
     Nr: raw.Nr,
     PN: raw.PN,
+    skippedKeys,
+    // Fallback to zeros for old sessions without a typingKey — typing won't work for those
+    // sessions until they're reset, but nothing will crash.
+    typingKey: raw.typingKey ? b(raw.typingKey) : new Uint8Array(32),
   };
 }
 
@@ -100,6 +109,7 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
   const [log, setLog] = useState<LogEntry[]>([]);
   const [recipientId, setRecipientIdState] = useState("");
   const [usernames, setUsernames] = useState<Map<string, string>>(() => loadUsernames(userId));
+  const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
 
   const socketRef = useRef<WebSocket | null>(null);
   const keysRef = useRef<any>(null);
@@ -113,6 +123,7 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectDelayRef = useRef(1000);
   const intentionalDisconnectRef = useRef(false);
+  const typingTimeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   const setRecipientId = (id: string) => {
     recipientIdRef.current = id;
@@ -127,8 +138,56 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
     ]);
   };
 
+  const setTypingForUser = (fromUserId: string, isTyping: boolean) => {
+    const existing = typingTimeoutsRef.current.get(fromUserId);
+    if (existing) clearTimeout(existing);
+
+    if (isTyping) {
+      setTypingUsers((prev) => { const next = new Set(prev); next.add(fromUserId); return next; });
+      // Auto-clear if stop_typing is never received
+      const t = setTimeout(() => {
+        setTypingUsers((prev) => { const next = new Set(prev); next.delete(fromUserId); return next; });
+        typingTimeoutsRef.current.delete(fromUserId);
+      }, 4000);
+      typingTimeoutsRef.current.set(fromUserId, t);
+    } else {
+      setTypingUsers((prev) => { const next = new Set(prev); next.delete(fromUserId); return next; });
+      typingTimeoutsRef.current.delete(fromUserId);
+    }
+  };
+
+  const notifyTyping = (isTyping: boolean) => {
+    if (socketRef.current?.readyState !== WebSocket.OPEN) return;
+    const rid = recipientIdRef.current;
+    if (!rid) return;
+
+    // Find all sessions we have with this recipient (one per their device)
+    const sessions = Array.from(sessionsRef.current.entries()).filter(([key]) =>
+      key.startsWith(`${rid}:`),
+    );
+    if (sessions.length === 0) return; // No established session yet — skip
+
+    const myIK = toBase64(keysRef.current.publicUpload.identity_x25519_public);
+    for (const [, state] of sessions) {
+      const { ct, nonce } = encryptTyping(state.typingKey, JSON.stringify({ ik: myIK }));
+      const frame = JSON.stringify({
+        type: isTyping ? "typing" : "stop_typing",
+        mailbox_id: rid,
+        payload: JSON.stringify({ ik: myIK, ct, nonce }),
+      });
+      socketRef.current!.send(frame);
+    }
+  };
+
   const saveSession = (key: string, state: RatchetState) => {
-    putValue("sessions-table", { id: key, ...state } as any).catch(
+    const serializable = {
+      id: key,
+      ...state,
+      // Map is not JSON-serializable — store as array of [key, bytes] pairs
+      skippedKeys: Array.from(state.skippedKeys.entries()).map(([k, v]) => [k, Array.from(v)]),
+      typingKey: Array.from(state.typingKey),
+    };
+    putValue("sessions-table", serializable as any).catch(
       (err) => console.error("Failed to persist session:", err),
     );
   };
@@ -201,6 +260,20 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
         return;
       }
 
+      if (parsed.type === "typing" || parsed.type === "stop_typing") {
+        try {
+          const { ik, ct, nonce } = JSON.parse(parsed.payload);
+          const state = sessionsRef.current.get(ik);
+          if (!state) return; // No session for this sender — ignore
+          decryptTyping(state.typingKey, ct, nonce); // throws if tampered
+          const senderId = ikToUserIdRef.current.get(ik);
+          if (senderId) setTypingForUser(senderId, parsed.type === "typing");
+        } catch {
+          // Wrong key or malformed — silently ignore
+        }
+        return;
+      }
+
       if (parsed.type !== "delivery") return;
 
       const deliverySeq = parsed.seq as number;
@@ -229,6 +302,7 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
           appendMessage(parsedPayload.to, "sent", parsedPayload.text);
         } else {
           saveContact(envelope.ik, parsedPayload.sender_id);
+          setTypingForUser(parsedPayload.sender_id, false);
           appendMessage(parsedPayload.sender_id, "received", parsedPayload.text);
         }
 
@@ -250,6 +324,7 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
             console.error("Unknown sender IK, cannot attribute message", envelope.ik);
             return;
           }
+          setTypingForUser(senderId, false);
           appendMessage(senderId, "received", parsedPayload.text);
         }
       }
@@ -452,5 +527,7 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
     clearLog,
     usernames,
     addContact,
+    typingUsers,
+    notifyTyping,
   };
 }

@@ -36,6 +36,10 @@ export default function ChatPage() {
   const isConnected = chat.wsStatus === "connected";
   const hasRecipient = !!chat.recipientId;
   const recipientName = chat.recipientId ? chat.usernames.get(chat.recipientId) : undefined;
+  const recipientIsTyping = chat.recipientId ? chat.typingUsers.has(chat.recipientId) : false;
+  const typingLabel = recipientIsTyping
+    ? `${recipientName ?? chat.recipientId.slice(0, 8) + "…"} is typing`
+    : null;
 
   return (
     <div className="chat-shell">
@@ -69,10 +73,21 @@ export default function ChatPage() {
           </div>
           <MessageList messages={chat.messages} />
           <DebugConsole log={chat.log} onClear={chat.clearLog} />
+          <div className={`typing-indicator${recipientIsTyping ? " typing-indicator-visible" : ""}`}>
+            {typingLabel && (
+              <>
+                <span className="typing-label">{typingLabel}</span>
+                <span className="typing-dots">
+                  <span /><span /><span />
+                </span>
+              </>
+            )}
+          </div>
           <MessageInput
             disabled={!isConnected || !hasRecipient}
             placeholder={!hasRecipient ? "Enter a recipient first…" : "Message"}
             onSend={handleSend}
+            onTyping={chat.notifyTyping}
           />
         </div>
       </div>
