@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useIndexedDB } from "./useIndexDb";
 import {
+  computeFingerprint,
   fetchAllDeviceBundles,
   initiateX3DH,
   receiveX3DH,
@@ -473,6 +474,15 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
 
   const clearLog = () => setLog([]);
 
+  const getFingerprint = (recipientId: string): string | null => {
+    if (!keysRef.current) return null;
+    // Reverse-look up the recipient's IK from the contact map (IK → userId)
+    const theirIK = Array.from(ikToUserIdRef.current.entries())
+      .find(([, uid]) => uid === recipientId)?.[0] ?? null;
+    if (!theirIK) return null;
+    return computeFingerprint(keysRef.current.publicUpload.identity_x25519_public, theirIK);
+  };
+
   useEffect(() => {
     if (isDBConnecting) return;
 
@@ -529,5 +539,6 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
     addContact,
     typingUsers,
     notifyTyping,
+    getFingerprint,
   };
 }

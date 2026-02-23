@@ -115,6 +115,19 @@ export async function fetchPrekeyBundle(
   };
 }
 
+// Produces a stable safety number for a conversation. Both parties derive the same
+// string because we sort the two keys before hashing — order of initiation doesn't matter.
+export function computeFingerprint(myIK: Uint8Array, theirIKb64: string): string {
+  const myIKb64 = toBase64(myIK);
+  const [keyA, keyB] = [myIKb64, theirIKb64].sort();
+  const combined = new TextEncoder().encode(keyA + keyB);
+  const hashBytes = sha256(combined);
+  const hex = Array.from(hashBytes, (b: number) => b.toString(16).padStart(2, "0")).join("");
+  // Display as 8 groups of 4, split across two lines of 4 groups each
+  const groups = hex.match(/.{4}/g)!.slice(0, 8);
+  return `${groups.slice(0, 4).join(" ")}\n${groups.slice(4).join(" ")}`;
+}
+
 export function verifyBundle(bundle: PreKeyBundle): boolean {
   const valid = ed25519.verify(
     bundle.signed_prekey_signature,

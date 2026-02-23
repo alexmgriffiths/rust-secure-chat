@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
@@ -20,6 +21,7 @@ export default function ChatPage() {
   };
 
   const chat = useChat(token, userId, handleAuthFailure);
+  const [showFingerprint, setShowFingerprint] = useState(false);
 
   const handleLogout = () => {
     chat.disconnect();
@@ -37,9 +39,7 @@ export default function ChatPage() {
   const hasRecipient = !!chat.recipientId;
   const recipientName = chat.recipientId ? chat.usernames.get(chat.recipientId) : undefined;
   const recipientIsTyping = chat.recipientId ? chat.typingUsers.has(chat.recipientId) : false;
-  const typingLabel = recipientIsTyping
-    ? `${recipientName ?? chat.recipientId.slice(0, 8) + "…"} is typing`
-    : null;
+  const fingerprint = hasRecipient ? chat.getFingerprint(chat.recipientId) : null;
 
   return (
     <div className="chat-shell">
@@ -65,24 +65,27 @@ export default function ChatPage() {
             {hasRecipient ? (
               <>
                 <span className="to-name">{recipientName ?? `${chat.recipientId.slice(0, 8)}…`}</span>
+                {fingerprint && (
+                  <button
+                    className="to-lock"
+                    onClick={() => setShowFingerprint(true)}
+                    title="View safety number"
+                    aria-label="View safety number"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                    </svg>
+                  </button>
+                )}
                 <button className="to-clear" onClick={() => chat.setRecipientId("")}>✕</button>
               </>
             ) : (
               <span className="to-placeholder">Press + in the sidebar to start a conversation</span>
             )}
           </div>
-          <MessageList messages={chat.messages} />
+          <MessageList messages={chat.messages} isTyping={recipientIsTyping} />
           <DebugConsole log={chat.log} onClear={chat.clearLog} />
-          <div className={`typing-indicator${recipientIsTyping ? " typing-indicator-visible" : ""}`}>
-            {typingLabel && (
-              <>
-                <span className="typing-label">{typingLabel}</span>
-                <span className="typing-dots">
-                  <span /><span /><span />
-                </span>
-              </>
-            )}
-          </div>
           <MessageInput
             disabled={!isConnected || !hasRecipient}
             placeholder={!hasRecipient ? "Enter a recipient first…" : "Message"}
@@ -91,6 +94,26 @@ export default function ChatPage() {
           />
         </div>
       </div>
+
+      {showFingerprint && fingerprint && (
+        <div className="fp-overlay" onClick={() => setShowFingerprint(false)}>
+          <div className="fp-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="fp-icon">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+              </svg>
+            </div>
+            <h2 className="fp-title">Safety Number</h2>
+            <p className="fp-desc">
+              Compare this number with {recipientName ?? "your contact"} on another channel.
+              If it matches, your conversation is secure.
+            </p>
+            <pre className="fp-code">{fingerprint}</pre>
+            <button className="fp-done" onClick={() => setShowFingerprint(false)}>Done</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -9,24 +9,38 @@ type Props = {
 
 export function MessageInput({ disabled, placeholder = "Message", onSend, onTyping }: Props) {
   const [value, setValue] = useState("");
+  const isTypingRef = useRef(false);
   const stopTypingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const typingHeartbeat = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopTyping = () => {
+    if (!isTypingRef.current) return;
+    isTypingRef.current = false;
+    if (typingHeartbeat.current) { clearInterval(typingHeartbeat.current); typingHeartbeat.current = null; }
+    if (stopTypingTimeout.current) { clearTimeout(stopTypingTimeout.current); stopTypingTimeout.current = null; }
+    onTyping?.(false);
+  };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setValue(e.target.value);
     if (onTyping) {
-      onTyping(true);
+      // Only send typing(true) on the idle→typing transition, not every keypress
+      if (!isTypingRef.current) {
+        isTypingRef.current = true;
+        onTyping(true);
+        // Heartbeat: re-send every 3s so the receiver's 4s auto-clear doesn't fire mid-sentence
+        typingHeartbeat.current = setInterval(() => onTyping(true), 3000);
+      }
+      // Reset the idle timer on each keystroke
       if (stopTypingTimeout.current) clearTimeout(stopTypingTimeout.current);
-      stopTypingTimeout.current = setTimeout(() => onTyping(false), 2000);
+      stopTypingTimeout.current = setTimeout(stopTyping, 2000);
     }
   };
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!value.trim()) return;
-    if (onTyping) {
-      onTyping(false);
-      if (stopTypingTimeout.current) clearTimeout(stopTypingTimeout.current);
-    }
+    stopTyping();
     onSend(value);
     setValue("");
   };

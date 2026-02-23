@@ -47,14 +47,13 @@ Message history is stored locally in IndexedDB because there's no way to re-decr
 
 High value, low effort:
 
-Typing indicators — A { type: "typing", mailbox_id } WebSocket frame, no crypto needed, huge perceived liveness improvement. Server just forwards it like any other frame, no persistence.
 OPK replenishment — Already in your TODO and it's a real security gap. After any X3DH init, fire a check: GET /users/:id/devices to see remaining OPK count, top up if below a threshold. Maybe 20 lines of client code + a new auth service endpoint.
-Key verification / safety numbers — Show a fingerprint derived from both parties' identity keys so users can verify they're not being MITM'd. Pure UI, no protocol changes. Builds trust in the E2EE claim.
+
 Medium value, medium effort:
 
-Skipped message keys — Also in your TODO. Out-of-order delivery is a real scenario (mobile networks, reconnects). Without it the ratchet breaks permanently on any reordering, which is a serious usability hole.
 Session reset — The escape hatch when things go wrong. A "Reset conversation" button that wipes all sessions for a contact and forces fresh X3DH on next send. Without it a desynced session is unrecoverable short of clearing all of IndexedDB.
 Delivery/read receipts — delivered_at already exists in the DB. "Read" would be a new ack frame the client sends when a message is displayed. Small protocol addition, big UX improvement.
+
 High value, high effort (probably not now):
 
 Group chats — Needs Sender Keys (Signal's group protocol) or a simpler fan-out approach. Major protocol work.
