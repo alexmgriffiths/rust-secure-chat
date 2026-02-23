@@ -40,20 +40,18 @@ Message history is stored locally in IndexedDB because there's no way to re-decr
 - Typing indicators — encrypted with a static per-session typing key derived from the master secret (separate from the message ratchet so typing events never advance the ratchet counter); server forwards opaque blobs; receiver authenticates and routes by sender IK; displayed as an animated iOS-style bubble at the bottom of the message list; throttled with idle detection and a heartbeat to avoid firing on every keystroke
 - Key verification / safety numbers — SHA-256 fingerprint of both parties' identity keys, sorted before hashing so both sides produce the same number regardless of who initiated; displayed as two rows of four hex groups in a modal behind a lock icon in the conversation header; only shown once a session is established
 - Portable crypto layer — all X3DH, Double Ratchet, serialization, and messaging logic lives in `web_client_2/src/crypto/` with no React dependencies; the folder can be copied directly into a React Native project or published as an npm package
+- OPK replenishment — client checks remaining one-time prekey count on every connect and whenever it receives an X3DH init frame; uploads a fresh batch of 10 when the count falls below 3; new key IDs continue from the current maximum to avoid collision
+- Session reset — circular-arrow button in the conversation header (visible once a session exists) drops all ratchet sessions for that contact from both in-memory state and IndexedDB; the next outbound message automatically runs a fresh X3DH init
 
 ## What still needs doing
 
-**OPK replenishment** — Each new session from a new contact consumes one of your one-time prekeys. You uploaded 10 on registration and never get more. The client should check how many are left on the server after initiating a session and top up when running low.
-
-**Session reset** — If a ratchet session gets permanently desynced there's no recovery path short of clearing IndexedDB. A "reset conversation" button that drops all sessions for a contact and forces a fresh X3DH init on the next message would fix this.
+**User profiles** — User profile and profile lookup needs to be done.
 
 **Delivery/read receipts** — `delivered_at` already exists in the DB. "Read" would be a new ack frame the client sends when a message is displayed. Small protocol addition, big UX improvement.
 
 **Group chats** — Needs Sender Keys (Signal's group protocol) or a simpler fan-out approach. Major protocol work.
 
 **Media sharing** — Needs a separate upload service and encrypted attachment handling.
-
-**Push notifications** — Web Push API for browsers, then APNs/FCM for mobile. Significant infra.
 
 ## Running it
 

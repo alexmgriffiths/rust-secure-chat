@@ -102,3 +102,8 @@ pub struct UsernameSearchResult {
     pub id: Uuid,
     pub username: String,
 }
+
+#[derive(Serialize)]
+pub struct OpkCountResponse {
+    pub count: i64,
+}

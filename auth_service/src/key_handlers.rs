@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::{
     handlers::AppState,
-    models::{Device, OneTimePreKey},
+    models::{Device, OneTimePreKey, OpkCountResponse},
 };
 
 #[derive(Deserialize)]
@@ -27,6 +27,11 @@ pub struct UploadDeviceRequest {
 pub struct OneTimePreKeyUpload {
     pub key_id: i32,
     pub public_key: Vec<u8>,
+}
+
+#[derive(Deserialize)]
+pub struct UploadOPKsRequest {
+    pub one_time_prekeys: Vec<OneTimePreKeyUpload>,
 }
 
 #[derive(Serialize)]
@@ -254,4 +259,35 @@ pub async fn list_user_devices(
             (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
         }
     }
+}
+
+pub async fn get_user_device_opk_count(
+    State(state): State<AppState>,
+    Path((_user_id, device_id)): Path<(Uuid, i64)>,
+) -> impl IntoResponse {
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM one_time_prekeys WHERE device_id = $1")
+            .bind(device_id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(0);
+    (StatusCode::OK, Json(OpkCountResponse { count })).into_response()
+}
+
+pub async fn upload_new_device_opks(
+    State(state): State<AppState>,
+    Path((_user_id, device_id)): Path<(Uuid, i64)>,
+    Json(payload): Json<UploadOPKsRequest>,
+) -> impl IntoResponse {
+    for prekey in &payload.one_time_prekeys {
+        let _ = sqlx::query(
+            "INSERT INTO one_time_prekeys (device_id, key_id, public_key) VALUES ($1, $2, $3)",
+        )
+        .bind(device_id)
+        .bind(prekey.key_id)
+        .bind(&prekey.public_key)
+        .execute(&state.db)
+        .await;
+    }
+    StatusCode::OK.into_response()
 }

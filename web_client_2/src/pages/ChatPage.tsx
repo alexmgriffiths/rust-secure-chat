@@ -22,6 +22,7 @@ export default function ChatPage() {
 
   const chat = useChat(token, userId, handleAuthFailure);
   const [showFingerprint, setShowFingerprint] = useState(false);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
 
   const handleLogout = () => {
     chat.disconnect();
@@ -66,17 +67,30 @@ export default function ChatPage() {
               <>
                 <span className="to-name">{recipientName ?? `${chat.recipientId.slice(0, 8)}…`}</span>
                 {fingerprint && (
-                  <button
-                    className="to-lock"
-                    onClick={() => setShowFingerprint(true)}
-                    title="View safety number"
-                    aria-label="View safety number"
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-                      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-                    </svg>
-                  </button>
+                  <>
+                    <button
+                      className="to-lock"
+                      onClick={() => setShowFingerprint(true)}
+                      title="View safety number"
+                      aria-label="View safety number"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                        <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                      </svg>
+                    </button>
+                    <button
+                      className="to-reset"
+                      onClick={() => setShowResetConfirm(true)}
+                      title="Reset encrypted session"
+                      aria-label="Reset encrypted session"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                        <path d="M3 3v5h5" />
+                      </svg>
+                    </button>
+                  </>
                 )}
                 <button className="to-clear" onClick={() => chat.setRecipientId("")}>✕</button>
               </>
@@ -94,6 +108,31 @@ export default function ChatPage() {
           />
         </div>
       </div>
+
+      {showResetConfirm && (
+        <div className="fp-overlay" onClick={() => setShowResetConfirm(false)}>
+          <div className="fp-modal" onClick={(e) => e.stopPropagation()}>
+            <h2 className="fp-title">Reset session?</h2>
+            <p className="fp-desc">
+              This will delete the current encrypted session with {recipientName ?? "this contact"}.
+              Your next message will start a fresh session via a new key exchange.
+              Message history is not affected.
+            </p>
+            <div className="reset-actions">
+              <button className="fp-done" onClick={() => setShowResetConfirm(false)}>Cancel</button>
+              <button
+                className="reset-confirm"
+                onClick={() => {
+                  chat.resetSession(chat.recipientId);
+                  setShowResetConfirm(false);
+                }}
+              >
+                Reset
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showFingerprint && fingerprint && (
         <div className="fp-overlay" onClick={() => setShowFingerprint(false)}>

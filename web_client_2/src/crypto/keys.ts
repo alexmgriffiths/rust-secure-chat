@@ -1,8 +1,8 @@
 import { ed25519, x25519 } from "@noble/curves/ed25519.js";
 import axios from "axios";
 
-type OneTimePreKeyPublic = { key_id: number; public_key: Uint8Array };
-type OneTimePreKeyPrivate = { key_id: number; private_key: Uint8Array };
+export type OneTimePreKeyPublic = { key_id: number; public_key: Uint8Array };
+export type OneTimePreKeyPrivate = { key_id: number; private_key: Uint8Array };
 
 export type DeviceKeys = {
   device_id?: number; // assigned by the server after upload, stored alongside keys
@@ -137,4 +137,50 @@ export async function uploadDeviceKeys(
     { headers: { Authorization: `Bearer ${token}` } },
   );
   return response.data.device_id as number;
+}
+
+export async function fetchOPKCount(
+  userId: string,
+  deviceId: number,
+  token: string,
+): Promise<number> {
+  const response = await axios.get(
+    `http://localhost:3000/users/${userId}/devices/${deviceId}/opk-count`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  return response.data.count as number;
+}
+
+export function generateOPKBatch(
+  startKeyId: number,
+  count: number,
+): { publicKeys: OneTimePreKeyPublic[]; privateKeys: OneTimePreKeyPrivate[] } {
+  const publicKeys: OneTimePreKeyPublic[] = [];
+  const privateKeys: OneTimePreKeyPrivate[] = [];
+  for (let i = 0; i < count; i++) {
+    const private_key = x25519.utils.randomSecretKey();
+    const public_key = x25519.getPublicKey(private_key);
+    const key_id = startKeyId + i;
+    publicKeys.push({ key_id, public_key });
+    privateKeys.push({ key_id, private_key });
+  }
+  return { publicKeys, privateKeys };
+}
+
+export async function uploadOPKBatch(
+  userId: string,
+  deviceId: number,
+  token: string,
+  publicKeys: OneTimePreKeyPublic[],
+): Promise<void> {
+  await axios.post(
+    `http://localhost:3000/users/${userId}/devices/${deviceId}/opks`,
+    {
+      one_time_prekeys: publicKeys.map((k) => ({
+        key_id: k.key_id,
+        public_key: Array.from(k.public_key),
+      })),
+    },
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
 }

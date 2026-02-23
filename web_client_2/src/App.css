@@ -900,6 +900,52 @@ body {
 
 .fp-done:hover { background: var(--border); border-color: var(--muted); }
 
+/* ── Reset confirm modal ──────────────────────────────────────────────────── */
+
+.reset-actions {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.reset-actions .fp-done { margin-top: 0; }
+
+.reset-confirm {
+  flex: 1;
+  padding: 12px;
+  background: rgba(248, 113, 113, 0.12);
+  border: 1px solid var(--red);
+  color: var(--red);
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: var(--sans);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.reset-confirm:hover { background: rgba(248, 113, 113, 0.22); }
+
+/* ── Reset button (to-row) ────────────────────────────────────────────────── */
+
+.to-reset {
+  background: none;
+  border: none;
+  color: var(--fg-muted, var(--muted));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+  opacity: 0.55;
+  transition: opacity 0.12s, color 0.12s, background 0.12s;
+}
+
+.to-reset:hover { opacity: 1; color: var(--red); background: rgba(248, 113, 113, 0.08); }
+
 /* ── Typing bubble ─────────────────────────────────────────────────────────── */
 
 .bubble-typing {

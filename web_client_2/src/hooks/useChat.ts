@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useIndexedDB } from "./useIndexDb";
 import { computeFingerprint, fetchAllDeviceBundles, toBase64, verifyBundle } from "../crypto/x3dh";
 import { RatchetState, decryptTyping, encryptTyping, deserializeSession, serializeSession } from "../crypto/ratchet";
-import { deserializeDeviceKeys } from "../crypto/keys";
+import { deserializeDeviceKeys, fetchOPKCount, generateOPKBatch, uploadOPKBatch, OneTimePreKeyPrivate } from "../crypto/keys";
 import { encryptForDevice, decryptInbound } from "../crypto/messaging";
 import { ConversationSummary, LogEntry, Message, WsStatus } from "../types/chat";
 
@@ -31,7 +31,7 @@ function loadUsernames(userId: string): Map<string, string> {
 }
 
 export function useChat(token: string, userId: string, onAuthFailure: () => void) {
-  const { getAllValues, putValue, isDBConnecting } = useIndexedDB("keys-db", [
+  const { getAllValues, putValue, deleteValue, isDBConnecting } = useIndexedDB("keys-db", [
     "keys-table",
     "sessions-table",
     "messages-table",
@@ -166,6 +166,7 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
       const frame = JSON.stringify({ type: "authenticate", token, last_seq: lastSeq });
       ws.send(frame);
       addLog("sent", frame);
+      replenishOPKsIfNeeded();
     };
 
     ws.onmessage = (event: MessageEvent) => {
@@ -216,6 +217,7 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
       if (myDeviceId !== undefined && envelope.device_id !== undefined && envelope.device_id !== myDeviceId) return;
 
       if (envelope.type === "init" || envelope.type === "msg") {
+        if (envelope.type === "init") replenishOPKsIfNeeded();
         try {
           const { plaintext, newState, ik } = decryptInbound(
             keysRef.current,
@@ -231,6 +233,17 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
             saveContact(ik, parsedPayload.sender_id);
             setTypingForUser(parsedPayload.sender_id, false);
             appendMessage(parsedPayload.sender_id, "received", parsedPayload.text);
+            // If they sent an init, they started fresh (e.g. reset). Drop our outbound
+            // session to them so our next reply also runs a fresh X3DH init rather than
+            // sending a "msg" frame they can no longer decrypt.
+            if (envelope.type === "init") {
+              for (const key of Array.from(sessionsRef.current.keys())) {
+                if (key.startsWith(`${parsedPayload.sender_id}:`)) {
+                  sessionsRef.current.delete(key);
+                  deleteValue("sessions-table", key);
+                }
+              }
+            }
           }
         } catch (err) {
           console.error("Failed to decrypt inbound message:", err);
@@ -342,6 +355,70 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
     return computeFingerprint(keysRef.current.publicUpload.identity_x25519_public, theirIK);
   };
 
+  const OPK_LOW_WATERMARK = 3;
+  const OPK_REPLENISH_COUNT = 10;
+
+  const replenishOPKsIfNeeded = async () => {
+    if (!keysRef.current?.device_id) return;
+    const deviceId = keysRef.current.device_id;
+    try {
+      const count = await fetchOPKCount(userId, deviceId, token);
+      if (count >= OPK_LOW_WATERMARK) return;
+
+      // Next key ID = one past the highest ID we've ever generated
+      const maxId = keysRef.current.privateStore.one_time_prekeys.reduce(
+        (m: number, k: OneTimePreKeyPrivate) => Math.max(m, k.key_id),
+        0,
+      );
+      const { publicKeys, privateKeys } = generateOPKBatch(maxId + 1, OPK_REPLENISH_COUNT);
+      await uploadOPKBatch(userId, deviceId, token, publicKeys);
+
+      // Update in-memory keys
+      keysRef.current.privateStore.one_time_prekeys.push(...privateKeys);
+      keysRef.current.publicUpload.one_time_prekeys.push(...publicKeys);
+
+      // Persist updated private keys to IndexedDB
+      const rawKeys = await getAllValues("keys-table");
+      if (rawKeys[0]) {
+        const updated = {
+          ...rawKeys[0],
+          privateStore: {
+            ...rawKeys[0].privateStore,
+            one_time_prekeys: keysRef.current.privateStore.one_time_prekeys.map((k: OneTimePreKeyPrivate) => ({
+              key_id: k.key_id,
+              private_key: Array.from(k.private_key),
+            })),
+          },
+        };
+        putValue("keys-table", updated).catch((err) =>
+          console.error("Failed to persist new OPKs:", err),
+        );
+      }
+    } catch (err) {
+      console.error("OPK replenishment check failed:", err);
+    }
+  };
+
+  const resetSession = (contactId: string) => {
+    // Delete all outbound session keys for this contact (keyed as `${contactId}:${deviceId}`)
+    for (const key of Array.from(sessionsRef.current.keys())) {
+      if (key.startsWith(`${contactId}:`)) {
+        sessionsRef.current.delete(key);
+        deleteValue("sessions-table", key);
+      }
+    }
+    // Delete all inbound sessions for this contact — one per device (each device has its own IK)
+    const theirIKs = Array.from(ikToUserIdRef.current.entries())
+      .filter(([, uid]) => uid === contactId)
+      .map(([ik]) => ik);
+    for (const ik of theirIKs) {
+      if (sessionsRef.current.has(ik)) {
+        sessionsRef.current.delete(ik);
+        deleteValue("sessions-table", ik);
+      }
+    }
+  };
+
   useEffect(() => {
     if (isDBConnecting) return;
 
@@ -399,5 +476,6 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
     typingUsers,
     notifyTyping,
     getFingerprint,
+    resetSession,
   };
 }
