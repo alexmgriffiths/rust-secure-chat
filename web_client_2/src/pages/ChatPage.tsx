@@ -35,6 +35,7 @@ export default function ChatPage() {
 
   const isConnected = chat.wsStatus === "connected";
   const hasRecipient = !!chat.recipientId;
+  const recipientName = chat.recipientId ? chat.usernames.get(chat.recipientId) : undefined;
 
   return (
     <div className="chat-shell">
@@ -49,18 +50,22 @@ export default function ChatPage() {
           conversations={chat.conversations}
           activeId={chat.recipientId}
           onSelect={chat.setRecipientId}
+          usernames={chat.usernames}
+          token={token}
+          onNewContact={chat.addContact}
         />
         <div className="chat-main">
           <div className="to-row">
             <span className="to-label">To</span>
             <div className="to-divider" />
-            <input
-              className="to-input"
-              placeholder="Recipient ID"
-              value={chat.recipientId}
-              onChange={(e) => chat.setRecipientId(e.target.value)}
-              spellCheck={false}
-            />
+            {hasRecipient ? (
+              <>
+                <span className="to-name">{recipientName ?? `${chat.recipientId.slice(0, 8)}…`}</span>
+                <button className="to-clear" onClick={() => chat.setRecipientId("")}>✕</button>
+              </>
+            ) : (
+              <span className="to-placeholder">Press + in the sidebar to start a conversation</span>
+            )}
           </div>
           <MessageList messages={chat.messages} />
           <DebugConsole log={chat.log} onClear={chat.clearLog} />

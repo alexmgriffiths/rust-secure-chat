@@ -91,3 +91,14 @@ pub struct GenericServerError {
     pub code: i32,
     pub message: String,
 }
+
+#[derive(Deserialize)]
+pub struct UsernameSearchRequest {
+    pub q: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct UsernameSearchResult {
+    pub id: Uuid,
+    pub username: String,
+}

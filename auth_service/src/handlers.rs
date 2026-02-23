@@ -4,7 +4,12 @@ use argon2::{
     Argon2, PasswordHash, PasswordVerifier,
     password_hash::{PasswordHasher, SaltString, rand_core::OsRng},
 };
-use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
+use axum::{
+    Json,
+    extract::{Query, State},
+    http::StatusCode,
+    response::IntoResponse,
+};
 use jsonwebtoken::{DecodingKey, Validation, decode};
 use uuid::Uuid;
 
@@ -13,7 +18,7 @@ use crate::{
     jwt::create_jwt,
     models::{
         Claims, CreateUserRequest, CreateUserResponse, GenericServerError, LoginResponse, User,
-        VerifyRequest,
+        UsernameSearchRequest, UsernameSearchResult, VerifyRequest,
     },
 };
 
@@ -136,6 +141,37 @@ pub async fn verify(Json(payload): Json<VerifyRequest>) -> impl IntoResponse {
         .into_response()
 }
 
+// TODO: Add auth to all these endpoints or at least rate-limits
+// TODO: Make it so they have to search for >=3 characters
+pub async fn search(
+    State(state): State<AppState>,
+    Query(params): Query<UsernameSearchRequest>,
+) -> impl IntoResponse {
+    let results = match sqlx::query_as!(
+        UsernameSearchResult,
+        r#"
+        SELECT id, username FROM users WHERE username ILIKE $1 || '%' OR similarity(username, $1) > 0.3
+        ORDER BY similarity(username, $1) DESC LIMIT 10
+    "#, params.q
+    ).fetch_all(&state.db).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Get users error: {e}");
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(GenericServerError {
+                    code: 500,
+                    message: e.to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    (StatusCode::OK, Json(results)).into_response()
+}
+
+// TODO: move to helper
 fn hash_password(password: &str) -> String {
     let salt = SaltString::generate(&mut OsRng);
     let argon2 = Argon2::default();

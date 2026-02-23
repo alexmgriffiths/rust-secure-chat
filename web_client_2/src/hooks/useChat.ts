@@ -77,6 +77,15 @@ function hydrateKeys(raw: any) {
   };
 }
 
+function loadUsernames(userId: string): Map<string, string> {
+  try {
+    const raw = localStorage.getItem(`relay_usernames_${userId}`);
+    return raw ? new Map(Object.entries(JSON.parse(raw))) : new Map();
+  } catch {
+    return new Map();
+  }
+}
+
 export function useChat(token: string, userId: string, onAuthFailure: () => void) {
   const { getAllValues, putValue, isDBConnecting } = useIndexedDB("keys-db", [
     "keys-table",
@@ -90,6 +99,7 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [log, setLog] = useState<LogEntry[]>([]);
   const [recipientId, setRecipientIdState] = useState("");
+  const [usernames, setUsernames] = useState<Map<string, string>>(() => loadUsernames(userId));
 
   const socketRef = useRef<WebSocket | null>(null);
   const keysRef = useRef<any>(null);
@@ -202,7 +212,7 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
       const envelope = JSON.parse(parsed.payload);
 
       const myDeviceId = keysRef.current?.device_id;
-      if (envelope.device_id !== undefined && envelope.device_id !== myDeviceId) return;
+      if (myDeviceId !== undefined && envelope.device_id !== undefined && envelope.device_id !== myDeviceId) return;
 
       if (envelope.type === "init") {
         const { masterSecret } = receiveX3DH(keysRef.current, envelope);
@@ -283,94 +293,107 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
     const myIK = toBase64(keysRef.current.publicUpload.identity_x25519_public);
     const plaintext = JSON.stringify({ sender_id: userId, text });
 
-    const deviceSessions = Array.from(sessionsRef.current.entries())
-      .filter(([key]) => key.startsWith(`${rid}:`));
+    // Always fetch the current device list so newly added devices are discovered automatically.
+    // For each device: use existing ratchet session if we have one, otherwise X3DH init.
+    const bundles = await fetchAllDeviceBundles(rid, token);
+    for (const bundle of bundles) {
+      if (!verifyBundle(bundle)) {
+        console.error("Bundle verification failed for device", bundle.device_id);
+        continue;
+      }
+      const sessionKey = `${rid}:${bundle.device_id}`;
+      const existingSession = sessionsRef.current.get(sessionKey);
 
-    if (deviceSessions.length === 0) {
-      // No existing sessions — initiate X3DH for each of recipient's devices
-      const bundles = await fetchAllDeviceBundles(rid, token);
-      for (const bundle of bundles) {
-        if (!verifyBundle(bundle)) {
-          console.error("Bundle verification failed for device", bundle.device_id);
-          continue;
-        }
+      let newState: RatchetState;
+      let envelope: string;
+
+      if (!existingSession) {
+        // No session yet — X3DH init
         const x3dh = initiateX3DH(keysRef.current, bundle);
-        let state = initRatchetSender(x3dh.masterSecret, x3dh.ekPriv, x3dh.ekPub, bundle.signed_prekey_public);
-        const { state: newState, header, ct, nonce } = ratchetEncrypt(state, plaintext);
-        const envelope = JSON.stringify({
+        const initState = initRatchetSender(x3dh.masterSecret, x3dh.ekPriv, x3dh.ekPub, bundle.signed_prekey_public);
+        const result = ratchetEncrypt(initState, plaintext);
+        newState = result.state;
+        envelope = JSON.stringify({
           type: "init",
           ik: myIK,
           ek: toBase64(x3dh.ekPub),
           opk_id: x3dh.opkId,
           device_id: x3dh.deviceId,
-          ...header,
-          ct,
-          nonce,
+          ...result.header,
+          ct: result.ct,
+          nonce: result.nonce,
         });
-        const message_id = crypto.randomUUID();
-        const sessionKey = `${rid}:${bundle.device_id}`;
-        sessionsRef.current.set(sessionKey, newState);
-        const frame = JSON.stringify({ type: "send", message_id, mailbox_id: rid, payload: envelope });
-        socketRef.current!.send(frame);
-        pendingAcks.current.set(message_id, { newState, sessionKey });
-        addLog("sent", frame);
+      } else {
+        // Existing session — ratchet forward
+        const result = ratchetEncrypt(existingSession, plaintext);
+        newState = result.state;
+        envelope = JSON.stringify({
+          type: "msg",
+          ik: myIK,
+          device_id: bundle.device_id,
+          ...result.header,
+          ct: result.ct,
+          nonce: result.nonce,
+        });
       }
-    } else {
-      // Existing sessions — encrypt once per known device session
-      for (const [sessionKey, state] of deviceSessions) {
-        const { state: newState, header, ct, nonce } = ratchetEncrypt(state, plaintext);
-        const deviceId = parseInt(sessionKey.split(":")[1]);
-        const envelope = JSON.stringify({ type: "msg", ik: myIK, device_id: deviceId, ...header, ct, nonce });
-        const message_id = crypto.randomUUID();
-        sessionsRef.current.set(sessionKey, newState);
-        const frame = JSON.stringify({ type: "send", message_id, mailbox_id: rid, payload: envelope });
-        socketRef.current!.send(frame);
-        pendingAcks.current.set(message_id, { newState, sessionKey });
-        addLog("sent", frame);
-      }
+
+      const message_id = crypto.randomUUID();
+      sessionsRef.current.set(sessionKey, newState);
+      const frame = JSON.stringify({ type: "send", message_id, mailbox_id: rid, payload: envelope });
+      socketRef.current!.send(frame);
+      pendingAcks.current.set(message_id, { newState, sessionKey });
+      addLog("sent", frame);
     }
 
-    // Sync sent message to own other devices
+    // Sync sent message to own other devices — same reconcile logic as above
     const syncPlaintext = JSON.stringify({ sync: true, to: rid, text });
-    const mySyncSessions = Array.from(sessionsRef.current.entries())
-      .filter(([key]) => key.startsWith(`${userId}:`));
+    const ownBundles = await fetchAllDeviceBundles(userId, token);
+    for (const bundle of ownBundles) {
+      if (bundle.device_id === keysRef.current.device_id) continue; // skip self
+      if (!verifyBundle(bundle)) continue;
+      const sessionKey = `${userId}:${bundle.device_id}`;
+      const existingSession = sessionsRef.current.get(sessionKey);
 
-    if (mySyncSessions.length === 0) {
-      const ownBundles = await fetchAllDeviceBundles(userId, token);
-      for (const bundle of ownBundles) {
-        if (bundle.device_id === keysRef.current.device_id) continue;
-        if (!verifyBundle(bundle)) continue;
+      let newState: RatchetState;
+      let syncEnvelope: string;
+
+      if (!existingSession) {
         const x3dh = initiateX3DH(keysRef.current, bundle);
-        let state = initRatchetSender(x3dh.masterSecret, x3dh.ekPriv, x3dh.ekPub, bundle.signed_prekey_public);
-        const { state: newState, header, ct, nonce } = ratchetEncrypt(state, syncPlaintext);
-        const syncEnvelope = JSON.stringify({
+        const initState = initRatchetSender(x3dh.masterSecret, x3dh.ekPriv, x3dh.ekPub, bundle.signed_prekey_public);
+        const result = ratchetEncrypt(initState, syncPlaintext);
+        newState = result.state;
+        syncEnvelope = JSON.stringify({
           type: "init", ik: myIK, ek: toBase64(x3dh.ekPub),
           opk_id: x3dh.opkId, device_id: x3dh.deviceId,
-          ...header, ct, nonce,
+          ...result.header, ct: result.ct, nonce: result.nonce,
         });
-        const message_id = crypto.randomUUID();
-        const sessionKey = `${userId}:${bundle.device_id}`;
-        sessionsRef.current.set(sessionKey, newState);
-        const frame = JSON.stringify({ type: "send", message_id, mailbox_id: userId, payload: syncEnvelope });
-        socketRef.current!.send(frame);
-        pendingAcks.current.set(message_id, { newState, sessionKey });
-        addLog("sent", frame);
+      } else {
+        const result = ratchetEncrypt(existingSession, syncPlaintext);
+        newState = result.state;
+        syncEnvelope = JSON.stringify({
+          type: "msg", ik: myIK, device_id: bundle.device_id,
+          ...result.header, ct: result.ct, nonce: result.nonce,
+        });
       }
-    } else {
-      for (const [sessionKey, state] of mySyncSessions) {
-        const { state: newState, header, ct, nonce } = ratchetEncrypt(state, syncPlaintext);
-        const deviceId = parseInt(sessionKey.split(":")[1]);
-        const syncEnvelope = JSON.stringify({ type: "msg", ik: myIK, device_id: deviceId, ...header, ct, nonce });
-        const message_id = crypto.randomUUID();
-        sessionsRef.current.set(sessionKey, newState);
-        const frame = JSON.stringify({ type: "send", message_id, mailbox_id: userId, payload: syncEnvelope });
-        socketRef.current!.send(frame);
-        pendingAcks.current.set(message_id, { newState, sessionKey });
-        addLog("sent", frame);
-      }
+
+      const message_id = crypto.randomUUID();
+      sessionsRef.current.set(sessionKey, newState);
+      const frame = JSON.stringify({ type: "send", message_id, mailbox_id: userId, payload: syncEnvelope });
+      socketRef.current!.send(frame);
+      pendingAcks.current.set(message_id, { newState, sessionKey });
+      addLog("sent", frame);
     }
 
     appendMessage(rid, "sent", text);
+  };
+
+  const addContact = (contactUserId: string, username: string) => {
+    setUsernames((prev) => {
+      const next = new Map(prev);
+      next.set(contactUserId, username);
+      localStorage.setItem(`relay_usernames_${userId}`, JSON.stringify(Object.fromEntries(next)));
+      return next;
+    });
   };
 
   const clearLog = () => setLog([]);
@@ -427,5 +450,7 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
     sendMessage,
     disconnect,
     clearLog,
+    usernames,
+    addContact,
   };
 }
