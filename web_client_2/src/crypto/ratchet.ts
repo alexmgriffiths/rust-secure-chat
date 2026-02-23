@@ -138,6 +138,49 @@ export function ratchetEncrypt(
   return { state: newState, header, ct: toBase64(ct), nonce: toBase64(nonce) };
 }
 
+// ── Serialization ────────────────────────────────────────────────────────────
+// Convert a RatchetState to a plain-object form safe for IndexedDB / JSON.
+// All Uint8Arrays become number[], Map becomes [key, bytes][] pairs.
+
+export function serializeSession(key: string, state: RatchetState): object {
+  return {
+    id: key,
+    RK: Array.from(state.RK),
+    CKs: state.CKs ? Array.from(state.CKs) : null,
+    CKr: state.CKr ? Array.from(state.CKr) : null,
+    DHs: { pub: Array.from(state.DHs.pub), priv: Array.from(state.DHs.priv) },
+    DHr: state.DHr ? Array.from(state.DHr) : null,
+    Ns: state.Ns,
+    Nr: state.Nr,
+    PN: state.PN,
+    skippedKeys: Array.from(state.skippedKeys.entries()).map(([k, v]) => [k, Array.from(v)]),
+    typingKey: Array.from(state.typingKey),
+  };
+}
+
+// Restore a RatchetState from its serialized form.
+// Handles three cases for each byte field:
+//   - number[]   (from explicit Array.from serialization)
+//   - plain object {0:x, 1:y, ...} (IndexedDB Uint8Array round-trip in some browsers)
+//   - Uint8Array  (direct IndexedDB round-trip in modern browsers)
+export function deserializeSession(raw: any): RatchetState {
+  const b = (v: any): Uint8Array => new Uint8Array(Object.values(v) as number[]);
+  return {
+    RK: b(raw.RK),
+    CKs: raw.CKs ? b(raw.CKs) : null,
+    CKr: raw.CKr ? b(raw.CKr) : null,
+    DHs: { pub: b(raw.DHs.pub), priv: b(raw.DHs.priv) },
+    DHr: raw.DHr ? b(raw.DHr) : null,
+    Ns: raw.Ns,
+    Nr: raw.Nr,
+    PN: raw.PN,
+    skippedKeys: new Map(
+      (raw.skippedKeys ?? []).map(([k, v]: [string, number[]]) => [k, new Uint8Array(v)]),
+    ),
+    typingKey: raw.typingKey ? b(raw.typingKey) : new Uint8Array(32),
+  };
+}
+
 export function ratchetDecrypt(
   state: RatchetState,
   header: RatchetHeader,

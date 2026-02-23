@@ -5,6 +5,8 @@ type OneTimePreKeyPublic = { key_id: number; public_key: Uint8Array };
 type OneTimePreKeyPrivate = { key_id: number; private_key: Uint8Array };
 
 export type DeviceKeys = {
+  device_id?: number; // assigned by the server after upload, stored alongside keys
+
   publicUpload: {
     // Identity keys (two-key model)
     identity_x25519_public: Uint8Array; // for DH
@@ -27,6 +29,37 @@ export type DeviceKeys = {
     one_time_prekeys: OneTimePreKeyPrivate[];
   };
 };
+
+// Restore a DeviceKeys object from its IndexedDB-persisted form.
+// Each Uint8Array field may come back as a plain {0:x,1:y,...} object,
+// a number[], or a Uint8Array — Object.values handles all three cases.
+export function deserializeDeviceKeys(raw: any): DeviceKeys {
+  const b = (v: any): Uint8Array => new Uint8Array(Object.values(v) as number[]);
+  return {
+    device_id: raw.device_id,
+    privateStore: {
+      ...raw.privateStore,
+      identity_x25519_private: b(raw.privateStore.identity_x25519_private),
+      identity_ed25519_private: b(raw.privateStore.identity_ed25519_private),
+      signed_prekey_private: b(raw.privateStore.signed_prekey_private),
+      one_time_prekeys: raw.privateStore.one_time_prekeys.map((k: any) => ({
+        key_id: k.key_id,
+        private_key: b(k.private_key),
+      })),
+    },
+    publicUpload: {
+      ...raw.publicUpload,
+      identity_x25519_public: b(raw.publicUpload.identity_x25519_public),
+      identity_ed25519_public: b(raw.publicUpload.identity_ed25519_public),
+      signed_prekey_public: b(raw.publicUpload.signed_prekey_public),
+      signed_prekey_signature: b(raw.publicUpload.signed_prekey_signature),
+      one_time_prekeys: raw.publicUpload.one_time_prekeys.map((k: any) => ({
+        key_id: k.key_id,
+        public_key: b(k.public_key),
+      })),
+    },
+  };
+}
 
 export function generateDeviceKeys(): DeviceKeys {
   // One Ed25519 keypair serves as the identity — same secret, two coordinate systems.

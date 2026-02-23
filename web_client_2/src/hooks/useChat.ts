@@ -1,22 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useIndexedDB } from "./useIndexDb";
-import {
-  computeFingerprint,
-  fetchAllDeviceBundles,
-  initiateX3DH,
-  receiveX3DH,
-  toBase64,
-  verifyBundle,
-} from "../crypto/x3dh";
-import {
-  RatchetState,
-  decryptTyping,
-  encryptTyping,
-  initRatchetReceiver,
-  initRatchetSender,
-  ratchetDecrypt,
-  ratchetEncrypt,
-} from "../crypto/ratchet";
+import { computeFingerprint, fetchAllDeviceBundles, toBase64, verifyBundle } from "../crypto/x3dh";
+import { RatchetState, decryptTyping, encryptTyping, deserializeSession, serializeSession } from "../crypto/ratchet";
+import { deserializeDeviceKeys } from "../crypto/keys";
+import { encryptForDevice, decryptInbound } from "../crypto/messaging";
 import { ConversationSummary, LogEntry, Message, WsStatus } from "../types/chat";
 
 const WS_URL = "ws://localhost:9901";
@@ -32,59 +19,6 @@ function isJwtExpired(token: string): boolean {
 
 function now() {
   return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
-function hydrateBytes(v: any): Uint8Array {
-  return new Uint8Array(Object.values(v));
-}
-
-function hydrateSession(raw: any): RatchetState {
-  const b = hydrateBytes;
-  const skippedKeys = new Map<string, Uint8Array>(
-    (raw.skippedKeys ?? []).map(([k, v]: [string, number[]]) => [k, new Uint8Array(v)]),
-  );
-  return {
-    RK: b(raw.RK),
-    CKs: raw.CKs ? b(raw.CKs) : null,
-    CKr: raw.CKr ? b(raw.CKr) : null,
-    DHs: { pub: b(raw.DHs.pub), priv: b(raw.DHs.priv) },
-    DHr: raw.DHr ? b(raw.DHr) : null,
-    Ns: raw.Ns,
-    Nr: raw.Nr,
-    PN: raw.PN,
-    skippedKeys,
-    // Fallback to zeros for old sessions without a typingKey — typing won't work for those
-    // sessions until they're reset, but nothing will crash.
-    typingKey: raw.typingKey ? b(raw.typingKey) : new Uint8Array(32),
-  };
-}
-
-function hydrateKeys(raw: any) {
-  const b = hydrateBytes;
-  return {
-    ...raw,
-    privateStore: {
-      ...raw.privateStore,
-      identity_x25519_private: b(raw.privateStore.identity_x25519_private),
-      identity_ed25519_private: b(raw.privateStore.identity_ed25519_private),
-      signed_prekey_private: b(raw.privateStore.signed_prekey_private),
-      one_time_prekeys: raw.privateStore.one_time_prekeys.map((k: any) => ({
-        key_id: k.key_id,
-        private_key: b(k.private_key),
-      })),
-    },
-    publicUpload: {
-      ...raw.publicUpload,
-      identity_x25519_public: b(raw.publicUpload.identity_x25519_public),
-      identity_ed25519_public: b(raw.publicUpload.identity_ed25519_public),
-      signed_prekey_public: b(raw.publicUpload.signed_prekey_public),
-      signed_prekey_signature: b(raw.publicUpload.signed_prekey_signature),
-      one_time_prekeys: raw.publicUpload.one_time_prekeys.map((k: any) => ({
-        key_id: k.key_id,
-        public_key: b(k.public_key),
-      })),
-    },
-  };
 }
 
 function loadUsernames(userId: string): Map<string, string> {
@@ -181,14 +115,7 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
   };
 
   const saveSession = (key: string, state: RatchetState) => {
-    const serializable = {
-      id: key,
-      ...state,
-      // Map is not JSON-serializable — store as array of [key, bytes] pairs
-      skippedKeys: Array.from(state.skippedKeys.entries()).map(([k, v]) => [k, Array.from(v)]),
-      typingKey: Array.from(state.typingKey),
-    };
-    putValue("sessions-table", serializable as any).catch(
+    putValue("sessions-table", serializeSession(key, state) as any).catch(
       (err) => console.error("Failed to persist session:", err),
     );
   };
@@ -288,45 +215,25 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
       const myDeviceId = keysRef.current?.device_id;
       if (myDeviceId !== undefined && envelope.device_id !== undefined && envelope.device_id !== myDeviceId) return;
 
-      if (envelope.type === "init") {
-        const { masterSecret } = receiveX3DH(keysRef.current, envelope);
-        let state = initRatchetReceiver(
-          masterSecret,
-          keysRef.current.privateStore.signed_prekey_private,
-          keysRef.current.publicUpload.signed_prekey_public,
-        );
-        const { state: newState, plaintext } = ratchetDecrypt(state, envelope, envelope.ct, envelope.nonce);
-        sessionsRef.current.set(envelope.ik, newState);
-        saveSession(envelope.ik, newState);
-        const parsedPayload = JSON.parse(plaintext);
-        if (parsedPayload.sync) {
-          appendMessage(parsedPayload.to, "sent", parsedPayload.text);
-        } else {
-          saveContact(envelope.ik, parsedPayload.sender_id);
-          setTypingForUser(parsedPayload.sender_id, false);
-          appendMessage(parsedPayload.sender_id, "received", parsedPayload.text);
-        }
-
-      } else if (envelope.type === "msg") {
-        const state = sessionsRef.current.get(envelope.ik);
-        if (!state) {
-          console.error("No session for sender", envelope.ik);
-          return;
-        }
-        const { state: newState, plaintext } = ratchetDecrypt(state, envelope, envelope.ct, envelope.nonce);
-        sessionsRef.current.set(envelope.ik, newState);
-        saveSession(envelope.ik, newState);
-        const parsedPayload = JSON.parse(plaintext);
-        if (parsedPayload.sync) {
-          appendMessage(parsedPayload.to, "sent", parsedPayload.text);
-        } else {
-          const senderId = ikToUserIdRef.current.get(envelope.ik);
-          if (!senderId) {
-            console.error("Unknown sender IK, cannot attribute message", envelope.ik);
-            return;
+      if (envelope.type === "init" || envelope.type === "msg") {
+        try {
+          const { plaintext, newState, ik } = decryptInbound(
+            keysRef.current,
+            (senderIK) => sessionsRef.current.get(senderIK),
+            envelope,
+          );
+          sessionsRef.current.set(ik, newState);
+          saveSession(ik, newState);
+          const parsedPayload = JSON.parse(plaintext);
+          if (parsedPayload.sync) {
+            appendMessage(parsedPayload.to, "sent", parsedPayload.text);
+          } else {
+            saveContact(ik, parsedPayload.sender_id);
+            setTypingForUser(parsedPayload.sender_id, false);
+            appendMessage(parsedPayload.sender_id, "received", parsedPayload.text);
           }
-          setTypingForUser(senderId, false);
-          appendMessage(senderId, "received", parsedPayload.text);
+        } catch (err) {
+          console.error("Failed to decrypt inbound message:", err);
         }
       }
     };
@@ -366,7 +273,6 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
     }
 
     const rid = recipientIdRef.current;
-    const myIK = toBase64(keysRef.current.publicUpload.identity_x25519_public);
     const plaintext = JSON.stringify({ sender_id: userId, text });
 
     // Always fetch the current device list so newly added devices are discovered automatically.
@@ -378,41 +284,12 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
         continue;
       }
       const sessionKey = `${rid}:${bundle.device_id}`;
-      const existingSession = sessionsRef.current.get(sessionKey);
-
-      let newState: RatchetState;
-      let envelope: string;
-
-      if (!existingSession) {
-        // No session yet — X3DH init
-        const x3dh = initiateX3DH(keysRef.current, bundle);
-        const initState = initRatchetSender(x3dh.masterSecret, x3dh.ekPriv, x3dh.ekPub, bundle.signed_prekey_public);
-        const result = ratchetEncrypt(initState, plaintext);
-        newState = result.state;
-        envelope = JSON.stringify({
-          type: "init",
-          ik: myIK,
-          ek: toBase64(x3dh.ekPub),
-          opk_id: x3dh.opkId,
-          device_id: x3dh.deviceId,
-          ...result.header,
-          ct: result.ct,
-          nonce: result.nonce,
-        });
-      } else {
-        // Existing session — ratchet forward
-        const result = ratchetEncrypt(existingSession, plaintext);
-        newState = result.state;
-        envelope = JSON.stringify({
-          type: "msg",
-          ik: myIK,
-          device_id: bundle.device_id,
-          ...result.header,
-          ct: result.ct,
-          nonce: result.nonce,
-        });
-      }
-
+      const { envelope, newState } = encryptForDevice(
+        keysRef.current,
+        bundle,
+        plaintext,
+        sessionsRef.current.get(sessionKey) ?? null,
+      );
       const message_id = crypto.randomUUID();
       sessionsRef.current.set(sessionKey, newState);
       const frame = JSON.stringify({ type: "send", message_id, mailbox_id: rid, payload: envelope });
@@ -421,37 +298,19 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
       addLog("sent", frame);
     }
 
-    // Sync sent message to own other devices — same reconcile logic as above
+    // Sync sent message to own other devices
     const syncPlaintext = JSON.stringify({ sync: true, to: rid, text });
     const ownBundles = await fetchAllDeviceBundles(userId, token);
     for (const bundle of ownBundles) {
       if (bundle.device_id === keysRef.current.device_id) continue; // skip self
       if (!verifyBundle(bundle)) continue;
       const sessionKey = `${userId}:${bundle.device_id}`;
-      const existingSession = sessionsRef.current.get(sessionKey);
-
-      let newState: RatchetState;
-      let syncEnvelope: string;
-
-      if (!existingSession) {
-        const x3dh = initiateX3DH(keysRef.current, bundle);
-        const initState = initRatchetSender(x3dh.masterSecret, x3dh.ekPriv, x3dh.ekPub, bundle.signed_prekey_public);
-        const result = ratchetEncrypt(initState, syncPlaintext);
-        newState = result.state;
-        syncEnvelope = JSON.stringify({
-          type: "init", ik: myIK, ek: toBase64(x3dh.ekPub),
-          opk_id: x3dh.opkId, device_id: x3dh.deviceId,
-          ...result.header, ct: result.ct, nonce: result.nonce,
-        });
-      } else {
-        const result = ratchetEncrypt(existingSession, syncPlaintext);
-        newState = result.state;
-        syncEnvelope = JSON.stringify({
-          type: "msg", ik: myIK, device_id: bundle.device_id,
-          ...result.header, ct: result.ct, nonce: result.nonce,
-        });
-      }
-
+      const { envelope: syncEnvelope, newState } = encryptForDevice(
+        keysRef.current,
+        bundle,
+        syncPlaintext,
+        sessionsRef.current.get(sessionKey) ?? null,
+      );
       const message_id = crypto.randomUUID();
       sessionsRef.current.set(sessionKey, newState);
       const frame = JSON.stringify({ type: "send", message_id, mailbox_id: userId, payload: syncEnvelope });
@@ -490,11 +349,11 @@ export function useChat(token: string, userId: string, onAuthFailure: () => void
       const raw = dbKeys[0];
       if (!raw) return;
 
-      keysRef.current = hydrateKeys(raw);
+      keysRef.current = deserializeDeviceKeys(raw);
 
       const storedSessions = await getAllValues("sessions-table");
       for (const s of storedSessions) {
-        sessionsRef.current.set(s.id, hydrateSession(s));
+        sessionsRef.current.set(s.id, deserializeSession(s));
       }
 
       const contacts = await getAllValues("contacts-table");

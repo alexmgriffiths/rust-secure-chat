@@ -36,29 +36,24 @@ Message history is stored locally in IndexedDB because there's no way to re-decr
 - WebSocket auto-reconnect — exponential backoff from 1s up to 30s on any unintentional disconnect; seamlessly re-authenticates and flushes missed messages via the sequence cursor
 - Redis-backed multi-server routing — connections are tracked in Redis so messages route correctly across socket server instances; pub/sub delivers to the right server in real time
 - User discovery — username search on the auth service with trigram similarity; sidebar shows names instead of truncated IDs; new conversations started by searching, not pasting UUIDs
+- Skipped message keys — per-session map of `(ratchet_pub, message_number) → message_key` checked before the normal decrypt path; out-of-order and late-arriving messages decrypt correctly without breaking the chain; MAX_SKIP=1000 caps the cache size to prevent DoS
+- Typing indicators — encrypted with a static per-session typing key derived from the master secret (separate from the message ratchet so typing events never advance the ratchet counter); server forwards opaque blobs; receiver authenticates and routes by sender IK; displayed as an animated iOS-style bubble at the bottom of the message list; throttled with idle detection and a heartbeat to avoid firing on every keystroke
+- Key verification / safety numbers — SHA-256 fingerprint of both parties' identity keys, sorted before hashing so both sides produce the same number regardless of who initiated; displayed as two rows of four hex groups in a modal behind a lock icon in the conversation header; only shown once a session is established
+- Portable crypto layer — all X3DH, Double Ratchet, serialization, and messaging logic lives in `web_client_2/src/crypto/` with no React dependencies; the folder can be copied directly into a React Native project or published as an npm package
 
 ## What still needs doing
 
 **OPK replenishment** — Each new session from a new contact consumes one of your one-time prekeys. You uploaded 10 on registration and never get more. The client should check how many are left on the server after initiating a session and top up when running low.
 
-**Skipped message keys** — The Double Ratchet implementation doesn't store keys for skipped messages. Out-of-order delivery would break the receive chain. The fix is a per-session map of `(ratchet_pub, message_number) → message_key` checked before the normal decrypt path.
-
 **Session reset** — If a ratchet session gets permanently desynced there's no recovery path short of clearing IndexedDB. A "reset conversation" button that drops all sessions for a contact and forces a fresh X3DH init on the next message would fix this.
 
-High value, low effort:
+**Delivery/read receipts** — `delivered_at` already exists in the DB. "Read" would be a new ack frame the client sends when a message is displayed. Small protocol addition, big UX improvement.
 
-OPK replenishment — Already in your TODO and it's a real security gap. After any X3DH init, fire a check: GET /users/:id/devices to see remaining OPK count, top up if below a threshold. Maybe 20 lines of client code + a new auth service endpoint.
+**Group chats** — Needs Sender Keys (Signal's group protocol) or a simpler fan-out approach. Major protocol work.
 
-Medium value, medium effort:
+**Media sharing** — Needs a separate upload service and encrypted attachment handling.
 
-Session reset — The escape hatch when things go wrong. A "Reset conversation" button that wipes all sessions for a contact and forces fresh X3DH on next send. Without it a desynced session is unrecoverable short of clearing all of IndexedDB.
-Delivery/read receipts — delivered_at already exists in the DB. "Read" would be a new ack frame the client sends when a message is displayed. Small protocol addition, big UX improvement.
-
-High value, high effort (probably not now):
-
-Group chats — Needs Sender Keys (Signal's group protocol) or a simpler fan-out approach. Major protocol work.
-Media sharing — Needs a separate upload service and encrypted attachment handling.
-Push notifications — Web Push API for browsers, then APNs/FCM for mobile. Significant infra.
+**Push notifications** — Web Push API for browsers, then APNs/FCM for mobile. Significant infra.
 
 ## Running it
 
