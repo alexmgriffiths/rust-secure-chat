@@ -20,7 +20,7 @@ dotenvy = "0.15.7"
 chrono = { version = "0.4", features = ["serde"] }
 argon2 = "0.5"
 password-hash = "0.5"
-rand = "0.10.0"
+rand = "0.10.1"
 jsonwebtoken = { version = "10.3.0", default-features = false, features = [
     "rust_crypto",
 ] }
